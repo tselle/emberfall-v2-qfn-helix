@@ -282,12 +282,27 @@ function chestModal(ev,key){
       }},
       {label:'Leave'}]});
 }
+function knockCasters(){
+  return UI.party().filter(function(c){return !c.dead&&c.cls==='M'&&c.mem&&c.mem.knock>0;});
+}
+function knockAction(onOpen){
+  var list=knockCasters();
+  return {label:'Knock'+(list.length?' — '+list[0].name.split(' ')[0]+' ('+list[0].mem.knock+' left)':''),
+    disabled:!list.length,on:function(){
+      var c=list[0];c.mem.knock--;if(c.mem.knock<=0)delete c.mem.knock;
+      G.time+=1;
+      UI.log('good',UI.esc(c.name)+' speaks a hollow word — the lock forgets its own purpose.');
+      UI.hud();UI.renderParty();
+      onOpen();
+    }};
+}
 function chestLockModal(ev,key){
   var lockItem=ev.chest.lock,pickKey='pick:'+key;
   var hasKey=UI.party().some(function(c){return !c.dead&&(c.inv.indexOf(lockItem)>=0||Object.keys(c.eq||{}).some(function(s){return c.eq[s]===lockItem;}));});
   UI.modal({title:'A locked treasure',body:'<p>'+UI.esc(ev.chest.text)+'</p><p>'+(ev.chest.lockText||'It is locked fast.')+'</p>',
     actions:[
     {label:'Use the key',disabled:!hasKey,on:function(){openChest(ev.chest,key);}},
+    knockAction(function(){openChest(ev.chest,key);}),
     {label:'Pick the lock',disabled:!!G.flags[pickKey+':done'],on:function(){
       G.flags[pickKey+':done']=1;G.time+=10;
       var best=null;UI.party().forEach(function(c){if(c.dead)return;var sk=Rules.thiefSkills(c);if(sk&&(!best||sk.pick>best.pick))best={c:c,s:sk};});
@@ -401,6 +416,7 @@ function lockModal(x,y){
       // consume: key is a quest item; keep it (reusable keys)
       enterRefresh();
     }},
+    knockAction(function(){setCell(G.map,x,y,'D');enterRefresh();}),
     {label:'Pick the lock',disabled:!!G.flags[pickKey+':done'],on:function(){
       G.flags[pickKey+':done']=1;
       G.time+=10;
@@ -970,6 +986,6 @@ return{
   doSearch:doSearch,doCamp:doCamp,reveal:reveal,opaque:opaque,
   giveToCarrier:giveToCarrier,wipe:wipe,mapId:function(){return G&&G.map;},
   paintMinimap:paintMinimap,paintBandPips:function(){paintMinimap();},awardXP:awardXP,
-  consumePack:consumePack,usePackItem:usePackItem,scrollSphereOK:scrollSphereOK
+  consumePack:consumePack,usePackItem:usePackItem,scrollSphereOK:scrollSphereOK,knockCasters:knockCasters
 };
 })();

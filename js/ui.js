@@ -174,7 +174,7 @@ function sheet(c){
     '</span><span class="acts">'+
     (it.t==='w'||it.t==='a'||it.t==='s'||it.t==='r'||it.t==='g'?'<button data-eq="'+c.id+'|'+id+'">Wear</button>':'')+
     (it.t==='p'||it.t==='x'||it.t==='d'?'<button data-use="'+c.id+'|'+id+'">Use</button>':'')+
-    '<button data-drop="'+c.id+'|'+id+'">Drop</button></span></div>':'';}).join('')||'<span class=muted>Empty pack</span>';
+    (it.t==='q'?'':'<button data-drop="'+c.id+'|'+id+'">Drop</button>')+'</span></div>':'';}).join('')||'<span class=muted>Empty pack</span>';
   // Mage spellbook: re-prepare choices freely — ready (mem) copies never move until rest.
   var prepHtml='';
   if(c.cls==='M'&&c.book&&c.book.length){
