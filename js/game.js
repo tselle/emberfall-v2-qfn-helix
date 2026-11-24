@@ -720,6 +720,35 @@ function aheadText(){
   return 'Facing '+DIRS[G.dir]+' — '+what+(G.march>=600?' · weary':'');
 }
 
+/* ============ Lay on hands (paladin, once-rest pool) ============ */
+function layPool(c){return (c.lvl|0)+Math.floor((c.lvl|0)/2);}
+function layLeft(c){return layPool(c)-(c.layUsed|0);}
+function layMenu(){
+  var pals=UI.party().filter(function(c){return c.cls==='P'&&!c.dead&&layLeft(c)>0;});
+  if(!pals.length){UI.toast('None who can lay on hands have strength left this rest.');return;}
+  function pickTarget(p){
+    var hurt=UI.party().filter(function(c){return !c.dead&&c.hp<c.maxhp;});
+    if(!hurt.length){UI.toast('No wounds left to close.');return;}
+    var body=UI.el('div');
+    body.appendChild(UI.el('p','muted',p.name+' has '+layLeft(p)+' point'+(layLeft(p)===1?'':'s')+' of healing left in hand. One touch, one soul.'));
+    UI.modal({title:'Lay on hands',body:body,actions:hurt.map(function(t){
+      var amt=Math.min(layLeft(p),2+Math.floor(p.lvl/2),t.maxhp-t.hp);
+      return {label:t.name+' ('+t.hp+'/'+t.maxhp+' hp) — heal '+amt,primary:t===hurt[0]?1:0,on:function(){
+        t.hp+=amt;p.layUsed=(p.layUsed|0)+amt;
+        UI.log('good',UI.esc(p.name)+' lays hands on '+UI.esc(t.name)+' — '+amt+' wound'+(amt===1?'':'s')+' closed.');
+        if(window.Game)Game.autosave();
+        UI.hud();UI.renderParty();
+      }};
+    }).concat([{label:'Not now'}])});
+  }
+  if(pals.length===1){pickTarget(pals[0]);return;}
+  var body=UI.el('div');
+  body.appendChild(UI.el('p','muted','Whose laid hands?'));
+  UI.modal({title:'Hands of the Faith',body:body,actions:pals.map(function(p,i){
+    return {label:p.name+' — '+layLeft(p)+' points left',primary:i===0?1:0,on:function(){pickTarget(p);}};
+  }).concat([{label:'Never mind'}])});
+}
+
 /* ============ Command bar ============ */
 function buildCmdBar(){
   var bar=document.getElementById('cmdbar');if(!bar||!X)return;
@@ -731,6 +760,7 @@ function buildCmdBar(){
   }
   btn('Search','Search (F)',doSearch,'M4 20 L10 14 M10 14 a5 5 0 1 0 -1 -1 M10 14 L6 18');
   btn('Camp','Camp (R)',doCamp,'M6 18 L12 6 L18 18 M4 18 H20');
+  btn('Lay','Lay on hands (paladin, per rest)',layMenu,'M9 20 c-3 -2 -5 -5 -5 -8 l0 -5 l2 0 l0 4 M12 19 l0 -12 l2 0 l0 11 M15 19 l0 -13 l2 0 l0 12 M18 18 l0 -8 l2 0 l0 9 c0 4 -3 7 -6 8 z');
   btn('Party','Company (P)',UI.toggleParty,'M8 6 a3 3 0 1 1 8 0 M4 20 c0 -5 16 -5 16 0');
   btn('Map','Survey map (M)',openFullMap,'M4 4 h16 v16 h-16 z M4 10 h16 M10 4 v16');
   btn('Journal','Journal (J)',function(){Journal.show();},'M6 3 h10 v18 l-5 -3 l-5 3 z');
