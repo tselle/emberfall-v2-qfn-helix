@@ -193,7 +193,12 @@ function sheet(c){
   wrap.innerHTML='<table>'+rows.map(function(r){return '<tr><th>'+r[0]+'</th><td>'+r[1]+'</td></tr>';}).join('')+'</table>'+
     (prepHtml?'<h3 style="color:var(--gold);margin-top:10px">Spellbook — lay out for the next rest</h3>'+prepHtml:'')+
     '<h3 style="color:var(--gold);margin-top:10px">Pack</h3>'+inv;
-  var entry=modal({title:c.name+' — Sheet',body:wrap,actions:[{label:'Close',primary:1}]});
+  var entry=modal({title:c.name+' — Sheet',body:wrap,actions:[{label:'Close',primary:1}],onOpen:function(){
+    var cv=el('canvas');cv.width=76;cv.height=98;
+    cv.style.cssText='float:left;margin:2px 14px 6px 2px';
+    try{Figures.portrait(c,cv);}catch(e){}
+    wrap.insertBefore(cv,wrap.firstChild);
+  }});
   wrap.addEventListener('click',function(e){
     var b=e.target.closest('button');if(!b)return;
     if(b.dataset.eq){var p=b.dataset.eq.split('|');Game.equip(UI.rosterById(p[0]),p[1]);close(entry);sheet(UI.rosterById(p[0]));}

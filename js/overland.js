@@ -5,7 +5,7 @@
 'use strict';
 var Over=(function(){
 var O=null,cv=null,ctx=null;
-var DIRK={w:[0,-1],s:[0,1],a:[-1,0],d:[1,0],q:[-1,-1],e:[1,-1],z:[-1,1],c:[1,1]};
+var DIRK={w:[0,-1],arrowup:[0,-1],s:[0,1],arrowdown:[0,1],a:[-1,0],arrowleft:[-1,0],d:[1,0],arrowright:[1,0],q:[-1,-1],e:[1,-1],z:[-1,1],c:[1,1]};
 var TERR={'.':{cost:1,p:.05},'=':{cost:.5,p:.035},'+':{cost:.5,p:.035},'T':{cost:2,p:.08},'n':{cost:2,p:.07},'%':{cost:3,p:.09}};
 
 function init(canvas){cv=canvas;ctx=canvas.getContext('2d');}

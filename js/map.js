@@ -69,7 +69,7 @@ function paint(cv,st){
     g.lineWidth=1;
   });
   /* ground loot — pink piles */
-  var gr=(gsave()&&gsave().ground&&g().ground[st.mapId])||{};
+  var gr=(gsave()&&gsave().ground&&gsave().ground[st.mapId])||{};
   Object.keys(gr).forEach(function(k){
     var p=k.split(','),x=+p[0],y=+p[1];if(!known(x,y))return;
     g.fillStyle='#e58fb0';
