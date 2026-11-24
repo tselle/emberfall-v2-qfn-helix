@@ -97,8 +97,9 @@ function step(){
     }
   });
   paintPips();
+  var sightedBefore=contact?wasSeen(contact):false;
   announce();
-  if(contact)engage(contact);
+  if(contact)engage(contact,sightedBefore);
 }
 /* creatures with a grammar and an appetite for coin may be talked to */
 function parleyable(def){
@@ -107,7 +108,7 @@ function parleyable(def){
   if(tg.indexOf('mindless')>=0||tg.indexOf('vermin')>=0||tg.indexOf('undead')>=0)return false;
   return tg.indexOf('humanoid')>=0||tg.indexOf('giantkin')>=0||tg.indexOf('gnoll')>=0||tg.indexOf('cult')>=0;
 }
-function engage(band){
+function engage(band,sightedBefore){
   var group=bands().filter(function(b){return b.map===mapId()&&Math.max(Math.abs(b.x-band.x),Math.abs(b.y-band.y))<=2;});
   var mons=group.map(function(b){return [b.mon,b.n];});
   function fight(withMalice){
@@ -121,7 +122,7 @@ function engage(band){
       onEnd:function(r){Watch.removeKeys(group.map(function(b){return b.k;}));}
     });
   }
-  var talkers=mons.every(function(pr){return parleyable(MONSTERS[pr[0]]);});
+  var talkers=(sightedBefore!==false)&&mons.every(function(pr){return parleyable(MONSTERS[pr[0]]);});
   var live=UI.party().filter(function(c){return !c.dead&&c.hp>0;});
   if(!talkers||!live.length){fight(false);return;}
   var price=mons.reduce(function(a,pr){
