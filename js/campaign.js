@@ -354,7 +354,43 @@ function inn(loc){
       }
       UI.log('dim',nights?(nights+' nights of beds and broth later.'):'No one needed the beds.');
     }},
+    {label:'Change the company',title:'Send one to the bench, take one up, or dismiss',on:function(){companyManager();}},
     {label:'Come away'}]});
+}
+/* ---- Inn company manager: bench / take along / dismiss ---- */
+function livingActive(){
+  return G.party.filter(function(id){
+    var c=G.roster.find(function(r){return r.id===id;});
+    return c&&!c.dead&&c.hp>0;
+  }).length;
+}
+function companyManager(){
+  var acts=G.roster.map(function(c){
+    var active=G.party.indexOf(c.id)>=0;
+    return {label:c.name+' — '+c.hp+'/'+c.maxhp+' hp — '+(c.dead?'dead':(active?'travelling':'in reserve')),
+      on:function(){memberDialog(c);}};
+  });
+  acts.push({label:'Done',primary:1,on:function(){Game.autosave();UI.hud();UI.renderParty();}});
+  UI.modal({title:'The company — '+G.party.length+' travelling',body:'<p class="muted">Six may travel; the rest keep the inn room. Dismissed adventurers leave for good.</p>',actions:acts});
+}
+function memberDialog(c){
+  var active=G.party.indexOf(c.id)>=0;
+  UI.modal({title:c.name+' — '+c.race+' '+c.cls+' '+c.lvl,
+    body:'<p class="muted">'+(c.dead?'Gone. Only the ledger remembers.':'Bench them to lighten the march, or dismiss them from the company entirely.')+'</p>',
+    actions:[
+    {label:'Take them along',disabled:active||c.dead||G.party.length>=6,
+      on:function(){G.party.push(c.id);UI.log('dim',c.name+' joins the travelling company.');companyManager();}},
+    {label:'Leave them behind',disabled:!active||livingActive()<=1,
+      on:function(){G.party.splice(G.party.indexOf(c.id),1);UI.log('dim',c.name+' stays behind.');companyManager();}},
+    {label:'Dismiss from the company',disabled:active&&livingActive()<=1,title:'The company must keep at least one living soul on the road',
+      on:function(){
+        var i=G.party.indexOf(c.id);if(i>=0)G.party.splice(i,1);
+        G.roster.splice(G.roster.indexOf(c),1);
+        UI.log('bad',c.name+' is paid off at the bar and walks out of the story.');
+        Game.autosave();UI.hud();UI.renderParty();
+        companyManager();
+      }},
+    {label:'Back',primary:1,on:function(){companyManager();}}]});
 }
 function svcBlurb(s){
   return {inn:'Warmth, beds and rumours behind the bar.',tavern:'A long room going quietly loud.',
