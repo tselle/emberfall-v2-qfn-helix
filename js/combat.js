@@ -361,7 +361,12 @@ function pcAttack(u,m,opts){
     var res=Rules.toHitRoll(c,m.ac,bonus);
     m.seen=true;
     if(u.fx.invisT>0){u.fx.invisT=0;logEvent(c.name+' steps out of thin air!');}
-    if(res.roll===20){
+    if(m.held>0){
+      // a sleeping or held foe yields to any opening: automatic hit, then wakes
+      var dmg0=swing(u,m,opts,first);
+      m.held=0;
+      logEvent(c.name+' puts a nerve home in the unresisting '+m.name+' ('+dmg0+').');
+    }else if(res.roll===20){
       var dmg=swing(u,m,opts,first);
       fxLunge(u,m.x,m.y);fxBurst(m.x,m.y,'#e3b54a','star');fxNum(m.x,m.y,'-'+dmg,'#ffd75e',17,(a-1)*20);
       fxNum(m.x,m.y,'20!','#e3b54a',12,20+(a-1)*20);
@@ -379,6 +384,11 @@ function pcAttack(u,m,opts){
 }
 function swing(u,m,opts,first){
   var c=u.c,w=weapon(c);
+  // silver-and-magic creatures: ordinary steel just closes back over
+  if(m.def.silver&&!((w&&(w.ench||0)>0)||/silver/i.test((w?(w.id+' '+(w.n||'')):'')))){
+    logEvent('The '+m.name+' shrugs the common blade; the wound knits shut.');
+    return 0;
+  }
   var dice=w?w.d:'1d3';
   var dmg=Rules.dice(dice)+strOf(c).dmg;
   if(u.fx.bless>0)dmg+=1;
