@@ -900,6 +900,7 @@ function drop(c,id){
 
 /* ============ Input ============ */
 document.addEventListener('keydown',function(e){
+  if(e.__uiTaken)return;                    // a dialog already spent this key
   if(document.getElementById('game').classList.contains('hidden'))return;
   if(UI.top())return;                       // dialogs own the keyboard
   if(Combat.isActive()){Combat.onKey(e);return;}

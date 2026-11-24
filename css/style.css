@@ -178,3 +178,8 @@ h1,h2,h3{font-weight:normal;letter-spacing:.04em}
   box-shadow:0 6px 18px rgba(0,0,0,.55);
   opacity:0;transform:translateY(3px);transition:opacity .12s ease,transform .12s ease}
 #ui-tip.on{opacity:1;transform:none}
+
+/* ---- hotkey badges on battle commands and dialog actions ---- */
+.kbd{display:inline-block;min-width:11px;margin:0 6px 0 1px;padding:0 3px;border:1px solid #c99b3f77;
+  border-radius:3px;color:#e3b54a;font:700 10px/15px Georgia,serif;text-align:center;font-style:normal}
+button:disabled .kbd{opacity:.45}

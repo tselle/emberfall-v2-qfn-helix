@@ -313,9 +313,15 @@ function strOf(c){return Rules.strOf(c);}
 function buildCommands(u){
   var bar=el('cmdbar');bar.innerHTML='';
   var hint=el('cmdhint');
+  var cidx=0;
   function cmd(label,fn,dis,title){
-    var b=document.createElement('button');b.innerHTML=label;
-    if(dis)b.disabled=true;if(title)b.title=title;
+    var b=document.createElement('button');
+    cidx++;
+    b.innerHTML='<b class=kbd>'+cidx+'</b>'+label;
+    b.setAttribute('data-key',cidx);
+    b.setAttribute('aria-label',label.replace(/^[^ ]+ /,'')+' (key '+cidx+')');
+    if(dis)b.disabled=true;
+    b.title=(title?title+' — ':'')+'key '+cidx;
     b.onclick=function(){if(!CB||CB.done)return;fn();};
     bar.appendChild(b);return b;
   }
@@ -992,6 +998,13 @@ function onClick(e){
 function onKey(e){
   if(!CB)return false;
   if(e.key==='Escape'){if(CB.tool){CB.tool=null;draw();return true;}return true;}
+  if(/^[1-9]$/.test(e.key)){
+    var bar=document.getElementById('cmdbar');
+    var kids=bar&&(bar.children||[]);
+    var b=kids[+e.key-1];
+    if(b&&b.onclick&&!b.disabled){if(b.click)b.click();else b.onclick({});}
+    return true;
+  }
   return false;
 }
 function init(canvas){cv=canvas;cv.addEventListener('click',onClick);}
@@ -1021,7 +1034,7 @@ function autoAct(){
   else if(u.c.hp<=0){} // downed by an opening blow: nothing more this act
   if(CB&&CB.token===tk)endAct();
 }
-return{start:start,isActive:isActive,onKey:onKey,init:init,autoAct:autoAct,_move:function(u,tx,ty){CB.turn=u;CB.moveSet=moveSet(u);return doMove(u,tx,ty);},
+return{start:start,isActive:isActive,onKey:onKey,init:init,autoAct:autoAct,__build:function(u){buildCommands(u);},_move:function(u,tx,ty){CB.turn=u;CB.moveSet=moveSet(u);return doMove(u,tx,ty);},
   _turn:function(){return CB&&CB.turn;},_cb:function(){return CB;},
   _clear:function(){if(CB&&CB.done)CB=null;}};
 })();

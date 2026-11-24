@@ -31,6 +31,7 @@ function modal(opts){
   back.addEventListener('click',function(){if(entry.closable)close(entry);});
   host.appendChild(back);host.appendChild(m);
   stack.push(entry);
+  if(opts.numberKeys!==false)numberButtons(m);
   var prim=bar.querySelector('.primary');if(prim&&!prim.disabled&&opts.focusPrimary!==false)prim.focus();
   if(opts.onOpen)opts.onOpen(entry);
   return entry;
@@ -49,10 +50,14 @@ document.addEventListener('keydown',function(e){
   if(ae&&/INPUT|SELECT|TEXTAREA/.test(ae.tagName))return;
   if(e.key==='Enter'){
     var p=t.bar.querySelector('.primary');
-    if(p&&!p.disabled){e.preventDefault();p.click();}
+    if(p&&!p.disabled){e.preventDefault();e.__uiTaken=true;p.click();}
+  }else if(/^[1-9]$/.test(e.key)){
+    var bs=dialogButtons(t.root);
+    var nb=bs[+e.key-1];
+    if(nb){e.preventDefault();if(e.stopPropagation)e.stopPropagation();e.__uiTaken=true;if(nb.click)nb.click();else nb.onclick({});}
   }else if(e.key==='Escape'){
-    if(t.closable){e.preventDefault();close(t);}else if(t.onKey)t.onKey(e);
-  }else if(t.onKey)t.onKey(e);
+    if(t.closable){e.preventDefault();e.__uiTaken=true;close(t);}else if(t.onKey)t.onKey(e);
+  }else if(t.onKey){e.__uiTaken=true;t.onKey(e);}
 },true);
 var toastT=null;
 function toast(msg){
@@ -315,6 +320,31 @@ function help(){
    '<p><b>Advancement:</b> XP is shared by survivors with a +10% prime-requisite bonus; levels are taken at the training hall for 100 gp × level, one level per training.</p>'+
    '<p><b>Campaign:</b> from a safe town, the menu\u2019s Campaign sends the company on to another adventure; the world keeps its gates, chests and deeds.</p>'});
 }
+/* Dialog button numbering: keys select actions in any modal (spell menus, sheets). */
+function dialogButtons(root){
+  if(root.querySelectorAll){
+    var q=[].slice.call(root.querySelectorAll('button')).filter(function(b){return !b.disabled;});
+    if(q.length)return q;
+  }
+  var out=[];(function w(el){(el.children||[]).forEach(function(c){
+    if(c&&(c.onclick||c.tagName==='BUTTON'))out.push(c);
+    if(c&&!c.disabled)w(c);
+  });})(root);
+  return out.filter(function(b){return !b.disabled;});
+}
+function numberButtons(root){
+  var list=dialogButtons(root);
+  for(var i=0;i<Math.min(list.length,10);i++){
+    var kb=document.createElement('b');kb.className='kbd';kb.textContent=String((i+1)%10);
+    if(kb.insertBefore||true){
+      var b=list[i];
+      if(b.firstChild&&b.insertBefore)b.insertBefore(kb,b.firstChild);
+      else if(b.children)b.children.unshift(kb);
+      else b.appendChild(kb);
+    }
+  }
+}
+
 /* ============ Hover tooltips ============ */
 /* iPadOS Safari shows no native title tooltips, even with a trackpad.
    One delegated pointer layer renders them ourselves; the title is moved
