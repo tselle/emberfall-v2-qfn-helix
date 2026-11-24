@@ -33,6 +33,13 @@ function show(){
   ids.forEach(function(id){
     var def=MONSTERS[id],r=b[id];
     var row=UI.el('div','item');
+    row.style.display='flex';row.style.gap='12px';row.style.alignItems='flex-start';
+    try{
+      var pc=document.createElement('canvas');
+      pc.width=62;pc.height=80;pc.style.cssText='flex:0 0 auto;border-radius:6px';
+      Figures.monFigure(def||{n:'Unnamed',fig:'blob'},pc);
+      row.appendChild(pc);
+    }catch(e){}
     var left=UI.el('div');
     left.innerHTML='<b style="color:'+(def&&def.undead?'#b9b29a':'#d8a25c')+'">'+UI.esc((def&&def.n)||'The Unnamed')+'</b>'+
       (r.slain?' <span class=good>×'+r.slain+' slain</span>':(r.fought?' <span class=gold>encountered</span>':' <span class=muted>sighted</span>'));
