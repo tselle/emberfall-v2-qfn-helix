@@ -459,6 +459,9 @@ function build(){
       _vr=dr;
       __villageName=VILLAGE[((seed>>>3)%VILLAGE.length)];
       __dungeonName=VILLAGE[((seed>>>7)%VILLAGE.length)]+' '+DUNGEON[((seed>>>11)%DUNGEON.length)];
+      // Spec §11 acceptance fixtures: two adventures are pinned references.
+      if(id==='adv1_1')__villageName='Crowstead';
+      if(id==='adv5_10'){__villageName='Greycross';__dungeonName='The Crypt of Zuloon';}
       REGION_HINT=__dungeonName;
       var regionName=REGION[((seed>>>5)%REGION.length)];
       // quests per deed-floor
@@ -566,6 +569,14 @@ function build(){
         hint:'The Way Down sits on the region road; each floor’s master keeps that floor’s deed.',
         victory:__dungeonName+' is cleared floor by floor and '+__villageName+' buys the round.',
         lose:regionName+' keeps '+__villageName+'’s best folk under it.'};
+      if(id==='adv1_1'&&MONSTERS['bo_adv1_1_1']){
+        MONSTERS['bo_adv1_1_1'].n='Othys the Many-Legged';
+        if(MONSTERS['bo_adv1_1_1_l'])MONSTERS['bo_adv1_1_1_l'].n='The Left Hand of Othys';
+      }
+      if(id==='adv5_10'&&MONSTERS['bo_adv5_10_5']){
+        MONSTERS['bo_adv5_10_5'].n='Zuloon the Barrow-King';
+        if(MONSTERS['bo_adv5_10_5_l'])MONSTERS['bo_adv5_10_5_l'].n='The Left Hand of Zuloon';
+      }
       bandTab.mods.push(id);
       list.push(id);
     }

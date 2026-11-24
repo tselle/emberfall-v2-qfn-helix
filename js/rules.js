@@ -205,6 +205,10 @@ function attacksPerRound(char,round,weaponFamily){
   if(char.fx&&char.fx.haste)total*=2;
   return Math.max(1,total);
 }
+/* Weapon specialization: a fighter wielding his chosen family gains +1 to hit. */
+function specAdj(char,weaponFamily){
+  return (char&&char.cls==='F'&&char.spec&&weaponFamily&&weaponFamily===char.spec)?1:0;
+}
 /* Missile rate of fire: 1 per round for most, 2 for bows at high level kept simple: 1. */
 function missileROF(char){return (char.cls==='F'||char.cls==='P'||char.cls==='R')&&char.lvl>=7?2:1;}
 
@@ -402,7 +406,7 @@ return{
   strAdj:strAdj,strDisplay:strDisplay,dexAdj:dexAdj,conAdj:conAdj,intAdj:intAdj,wisAdj:wisAdj,chaAdj:chaAdj,divineFail:divineFail,
   RACES:RACES,CLASSES:CLASSES,XPT:XPT,KIT_LEVELS:KIT_LEVELS,KIT_GOLD:KIT_GOLD,
   SAVE_NAMES:SAVE_NAMES,saveTargets:saveTargets,THAC0:THAC0,
-  attacksPerRound:attacksPerRound,missileROF:missileROF,
+  attacksPerRound:attacksPerRound,specAdj:specAdj,missileROF:missileROF,
   MAGE_SLOTS:MAGE_SLOTS,PRIEST_SLOTS:PRIEST_SLOTS,slotsFor:slotsFor,maxRing:maxRing,bonusSlots:bonusSlots,
   rollScores:rollScores,genScores:genScores,rollClassGold:rollClassGold,rollHP:rollHP,firstLevelHP:firstLevelHP,pcStrength:pcStrength,
   abilityScore:abilityScore,strOf:strOf,dexOf:dexOf,conOf:conOf,intOf:intOf,wisOf:wisOf,chaOf:chaOf,

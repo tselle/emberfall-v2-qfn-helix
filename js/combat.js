@@ -345,6 +345,7 @@ function pcAttack(u,m,opts){
   for(var a=0;a<n;a++){
     if(!CB||CB.done||!standing(m)){break;}
     var bonus=strOf(c).hit|0;
+    if(window.Rules&&Rules.specAdj)bonus+=Rules.specAdj(c,w?w.fam:null);
     if(u.fx.bless>0)bonus+=1;
     if(u.fx.prayer>0)bonus+=1;
     if(opts.backstab&&first)bonus+=4;
