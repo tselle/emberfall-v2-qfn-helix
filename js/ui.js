@@ -59,6 +59,21 @@ document.addEventListener('keydown',function(e){
     if(t.closable){e.preventDefault();e.__uiTaken=true;close(t);}else if(t.onKey)t.onKey(e);
   }else if(t.onKey){e.__uiTaken=true;t.onKey(e);}
 },true);
+/* Spoils summary: chest hauls and battle awards get their own parchment. */
+function spoils(opts){
+  opts=opts||{};
+  var rows=[];
+  if(opts.gold)rows.push('<div class=item><span><b>◆ '+opts.gold+' gp</b></span><span class=muted>to the purse</span></div>');
+  (opts.items||[]).forEach(function(t){
+    rows.push('<div class=item><span>'+esc(t)+'</span><span class=muted>'+
+      esc((opts.carriers&&opts.carriers[t])?'carried by '+opts.carriers[t]:'into the pack')+'</span></div>');
+  });
+  (opts.lines||[]).forEach(function(l){rows.push('<p class=muted style="margin:6px 0">'+l+'</p>');});
+  var body=el('div',null,rows.join('')||'<p class=muted>Nothing but mud and memory.</p>');
+  return modal({title:opts.title||'Spoils',body:body,
+    actions:[{label:opts.action||'Take it all',primary:1}]});
+}
+
 var toastT=null;
 function toast(msg){
   var host=$('modals');var t=$('ui-toast');
@@ -398,6 +413,6 @@ if(window.addEventListener){window.addEventListener('blur',tipHide);window.addEv
 document.addEventListener('keydown',function(e){if(e.key==='Escape')tipHide();},true);
 
 return{el:el,esc:esc,$:$,modal:modal,close:close,closeAll:closeAll,top:top,toast:toast,log:log,
-  hud:hud,party:party,rosterById:rosterById,colorOf:colorOf,renderParty:renderParty,toggleParty:toggleParty,initPartyPref:initPartyPref,closeTop:closeTop,tipHide:tipHide,
+  hud:hud,party:party,rosterById:rosterById,colorOf:colorOf,renderParty:renderParty,toggleParty:toggleParty,initPartyPref:initPartyPref,closeTop:closeTop,tipHide:tipHide,spoils:spoils,
   sheet:sheet,createHero:createHero,saveDialog:saveDialog,loadDialog:loadDialog,menu:menu,help:help};
 })();

@@ -90,6 +90,15 @@ function finish(result){
   Game.enterMap(G.map,G.x,G.y,G.dir,{restoring:true});
   if(r.result==='win')UI.log('good','The field is yours.');
   if(r.result==='fled')UI.log('dim','You break away, blood and mud.');
+  if(r.result==='win'&&(r.xp||r.spoilsGold||(r.spoilsItems||[]).length)){
+    var lines=[];
+    if(r.xp)lines.push('The company shares <b>'+r.xp+' experience</b> among the living.');
+    if(UI.party().some(function(c){return !c.dead&&Rules.canTrain(c);}))
+      lines.push('Some stand taller — the training hall in town awaits.');
+    UI.spoils({title:'The field is yours',gold:r.spoilsGold,
+      items:(r.spoilsItems||[]).map(function(n){return UI.esc(n);}),
+      carriers:r.spoilsCarriers,lines:lines,action:'Take it all'});
+  }
 }
 function resolve(result){
   var r={result:result,xp:0,rounds:CB.round,fell:[]};
@@ -115,10 +124,12 @@ function resolve(result){
       if(CB.pcs.some(function(p){return !p.c.dead&&p.c.xp>=Rules.nextXP(p.c);}))
         UI.log('spell','Some stand taller — training hall promotion waits in town.');
     }
+    r.spoilsGold=0;r.spoilsItems=[];r.spoilsCarriers={};r.train=false;
     if(result==='win'&&CB.spec.loot){
       var L=CB.spec.loot;
-      if(L.gold){var g=typeof L.gold==='string'?Rules.dice(L.gold):L.gold;if(g){G.gold+=g;logEvent('Spoils: '+g+' gp.');}}
-      (L.items||[]).forEach(function(id){Game.giveToCarrier(id);logEvent('Recovered: '+itemName(id));});
+      if(L.gold){var g=typeof L.gold==='string'?Rules.dice(L.gold):L.gold;if(g){G.gold+=g;r.spoilsGold=g;logEvent('Spoils: '+g+' gp.');}}
+      (L.items||[]).forEach(function(id){var cb2=Game.giveToCarrier(id);var nm=itemName(id);
+        r.spoilsItems.push(nm);r.spoilsCarriers[nm]=cb2?cb2.name:'';logEvent('Recovered: '+nm);});
     }
     if(result==='win'&&CB.spec.onWin)CB.spec.onWin(r);
   }

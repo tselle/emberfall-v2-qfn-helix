@@ -39,11 +39,11 @@ function setPlay(p){
 /* Roll a dice spec: 'NdS', 'NdS+K', 'NdS-K', 'dS', or a plain number. */
 function dice(spec,rng){
   if(typeof spec==='number')return spec;
-  var m=/^(\d*)d(\d+)([+-]\d+)?$/i.exec(String(spec).replace(/\s/g,''));
+  var m=/^(\d*)d(\d+)([+-]\d+)?(?:x(\d+))?$/i.exec(String(spec).replace(/\s/g,'').replace(/[\u00d7\u2715*]/g,'x'));
   if(!m)return 0;
-  var n=m[1]?+m[1]:1,s=+m[2],k=m[3]?+m[3]:0,t=0;
+  var n=m[1]?+m[1]:1,s=+m[2],k=m[3]?+m[3]:0,x=m[4]?+m[4]:1,t=0;
   if(rng){for(var i=0;i<n;i++)t+=rng.int(1,s);}else{t=play.d(n,s);}
-  return Math.max(0,t+k);
+  return Math.max(0,(t+k)*x);
 }
 /* Monster HD notation: 4.3 = 4d8+3, 0.5 = 1d4, 0.9 = 1d8-1, 3 = 3d8. */
 function hdHP(hd,rng){

@@ -261,11 +261,13 @@ function chestModal(ev,key){
           Combat.start({mons:guards,title:'Chest guard',text:'The guardian moves on the treasure.',
             loot:{items:ev.chest.items||[],gold:ev.chest.gold?undefined:undefined},
             onWin:function(){G.flags[key]='done';
-              var gold=Rules.dice(ev.chest.gold||'0')|0;
+              var gold=Rules.dice(ev.chest.gold||'0')|0,got=[],carriers={};
               if(gold){G.gold+=gold;UI.log('gold','The hoard divides at '+gold+' gp.');}
-              (ev.chest.items||[]).forEach(function(id){giveToCarrier(id);UI.log('gold','Recovered: '+UI.esc(itemName(id))+'.');});
+              (ev.chest.items||[]).forEach(function(id){var c=giveToCarrier(id);var nm=itemName(id);
+                carriers[UI.esc(nm)]=c?c.name:'';got.push(UI.esc(nm));UI.log('gold','Recovered: '+UI.esc(nm)+'.');});
               if(ev.chest.trap){/* trap still waits under the lid */}
-              autosave();paintMinimap();UI.hud();}});
+              autosave();paintMinimap();UI.hud();
+              UI.spoils({title:'The guarded treasure',gold:gold,items:got,carriers:carriers,action:'Take it all'});}});
         }},
         {label:'Leave it'}]});
     return;
@@ -341,17 +343,24 @@ function stepBack(){/* withdrawal leaves you where you stood; the tile waits */}
 function openChest(ch,key){
   G.flags[key]='done';
   var gold=Rules.dice(ch.gold||'0')|0;
+  var lines=[],carriers={},names=[];
   if(gold){G.gold+=gold;UI.log('good','You divide '+gold+' gp among the purse.');
     var xp=Math.floor(gold/Math.max(1,UI.party().filter(function(c){return !c.dead;}).length||1));
-    awardXP(xp);}
+    awardXP(xp);
+    lines.push('Coin is worth experience: the company shares <b>'+xp+' XP</b> apiece.');}
   (ch.items||[]).forEach(function(id){
-    giveToCarrier(id);
-    UI.log('gold','Found: '+UI.esc(itemName(id))+'.');
+    var carrier=giveToCarrier(id);
+    var nm=itemName(id);
+    carriers[nm]=carrier?carrier.name:'';
+    names.push(nm);
+    UI.log('gold','Found: '+UI.esc(nm)+'.');
     if(id.indexOf('scroll:')!==0&&item(id)&&item(id).t==='q'){}
   });
   if(ch.items&&ch.items.length)Journal.note('Recovered '+ch.items.map(itemName).join(', ')+'.','loot');
   else if(gold)Journal.note('Found '+gold+' gp of treasure.','loot');
   autosave();paintMinimap();UI.hud();
+  UI.spoils({title:'The chest yields',gold:gold,items:names.map(function(n){return UI.esc(n);}),
+    carriers:carriers,lines:lines,action:'Take it all'});
 }
 function chestTrap(kind){
   UI.log('bad','A trap springs from the chest!');
@@ -385,8 +394,10 @@ function applyDamage(c,dmg,why){
   }
 }
 function giveToCarrier(id){
-  var p=UI.party().find(function(c){return !c.dead;})||UI.party()[0];
-  if(p)p.inv.push(id);
+  var live=UI.party().filter(function(c){return !c.dead;});
+  var p=live.sort(function(a,b){return (a.inv||[]).length-(b.inv||[]).length;})[0]||UI.party()[0];
+  if(p){p.inv=p.inv||[];p.inv.push(id);}
+  return p;
 }
 function awardXP(each){
   UI.party().forEach(function(c){
@@ -981,6 +992,7 @@ return{
   SAVE_PREFIX:SAVE_PREFIX,DIRS:DIRS,
   enterMap:enterMap,initSeen:initSeen,closeStairsLoop:closeStairsLoop,
   log:function(k,m){UI.log(k,m);},
+  __chest:function(ch,key){chestModal({chest:ch},key);},
   hud:function(){UI.hud();if(UI.top()===null&&document.getElementById('party').classList.contains('open'))UI.renderParty();},
   openFullMap:openFullMap,aheadText:aheadText,cellAt:cellAt,
   equip:equip,drop:drop,quitToTitle:quitToTitle,
