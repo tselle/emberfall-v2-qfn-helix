@@ -270,10 +270,18 @@ function pathTo(u,tx,ty){
 function doMove(u,tx,ty){
   var p=pathTo(u,tx,ty);
   if(!p)return false;
+  var encircled=CB.mons.filter(function(m){return standing(m)&&dist8(u,m)<=1;});
   u.x=tx;u.y=ty;
   fxBurst(tx,ty,'#39405e','ring');
+  // opportunity strikes: stepping out of a foe’s reach invites one free blow each
+  if(u.side==='p'&&u.c.hp>0)encircled.forEach(function(m){
+    if(!standing(m)||m.aoRound===CB.round||dist8(u,m)<=1)return;
+    m.aoRound=CB.round;
+    logEvent(m.name+' takes the opening as '+u.c.name+' steps away!');
+    monStrike(m,u);
+  });
   CB.moveSet=moveSet(u);
-  draw();
+  draw();winCheck();
   return true;
 }
 function dist8(a,b){return Math.max(Math.abs(a.x-b.x),Math.abs(a.y-b.y));}
@@ -954,7 +962,7 @@ function onClick(e){
       }
       if(best)doMove(u,best[0],best[1]);
     }
-    if(dist8(u,target)<=1){pcAttack(u,target,{backstab:tool.backstab,called:tool.called});CB.tool=null;endAct();}
+    if(u.c.hp>0&&dist8(u,target)<=1){pcAttack(u,target,{backstab:tool.backstab,called:tool.called});CB.tool=null;endAct();}
     else UI.toast('Feet cannot reach a striking place this act.');
     return;
   }
@@ -999,11 +1007,11 @@ function autoAct(){
     }
     if(best)doMove(u,best[0],best[1]);
   }
-  if(dist8(u,m)<=1)pcAttack(u,m,{});
-  else if(u.c.hp<=0){} // downed: nothing
+  if(u.c.hp>0&&dist8(u,m)<=1)pcAttack(u,m,{});
+  else if(u.c.hp<=0){} // downed by an opening blow: nothing more this act
   if(CB&&CB.token===tk)endAct();
 }
-return{start:start,isActive:isActive,onKey:onKey,init:init,autoAct:autoAct,
+return{start:start,isActive:isActive,onKey:onKey,init:init,autoAct:autoAct,_move:function(u,tx,ty){CB.turn=u;CB.moveSet=moveSet(u);return doMove(u,tx,ty);},
   _turn:function(){return CB&&CB.turn;},_cb:function(){return CB;},
   _clear:function(){if(CB&&CB.done)CB=null;}};
 })();
