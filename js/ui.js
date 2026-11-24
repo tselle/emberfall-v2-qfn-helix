@@ -175,8 +175,23 @@ function sheet(c){
     (it.t==='w'||it.t==='a'||it.t==='s'||it.t==='r'||it.t==='g'?'<button data-eq="'+c.id+'|'+id+'">Wear</button>':'')+
     (it.t==='p'||it.t==='x'||it.t==='d'?'<button data-use="'+c.id+'|'+id+'">Use</button>':'')+
     '<button data-drop="'+c.id+'|'+id+'">Drop</button></span></div>':'';}).join('')||'<span class=muted>Empty pack</span>';
+  // Mage spellbook: re-prepare choices freely — ready (mem) copies never move until rest.
+  var prepHtml='';
+  if(c.cls==='M'&&c.book&&c.book.length){
+    var slots3=R.slotsFor('M',c.lvl,R.abilityScore(c,'int'));
+    c.book.slice().sort(function(a,b){return ((SPELLS[a]?SPELLS[a].l:9)-(SPELLS[b]?SPELLS[b].l:9))||SPELLS[a].n.localeCompare(SPELLS[b].n);}).forEach(function(sp){
+      var def=SPELLS[sp];if(!def)return;
+      var mem3=(c.mem&&c.mem[sp])||0,prep=(c.prep&&c.prep[sp])||0;
+      var used=0;Object.keys(c.prep||{}).forEach(function(s){if(SPELLS[s]&&SPELLS[s].l===def.l)used+=c.prep[s];});
+      var room=(slots3[def.l-1]||0)-used;
+      prepHtml+='<div class=item><span>'+esc(def.n)+' <span class=muted>ring '+def.l+' · ready '+mem3+' · laid out '+prep+(room>0?' · '+(def.l)+'-ring room '+room:'')+'</span></span><span class="acts">'+
+        '<button data-prep="+|'+sp+'"'+(room<=0?' disabled':'')+'>Prepare</button>'+
+        (prep>0?'<button data-prep="-|'+sp+'">Unprepare</button>':'')+'</span></div>';
+    });
+  }
   var wrap=el('div');
   wrap.innerHTML='<table>'+rows.map(function(r){return '<tr><th>'+r[0]+'</th><td>'+r[1]+'</td></tr>';}).join('')+'</table>'+
+    (prepHtml?'<h3 style="color:var(--gold);margin-top:10px">Spellbook — lay out for the next rest</h3>'+prepHtml:'')+
     '<h3 style="color:var(--gold);margin-top:10px">Pack</h3>'+inv;
   var entry=modal({title:c.name+' — Sheet',body:wrap,actions:[{label:'Close',primary:1}]});
   wrap.addEventListener('click',function(e){
@@ -184,6 +199,13 @@ function sheet(c){
     if(b.dataset.eq){var p=b.dataset.eq.split('|');Game.equip(UI.rosterById(p[0]),p[1]);close(entry);sheet(UI.rosterById(p[0]));}
     if(b.dataset.use){var p2=b.dataset.use.split('|');Game.usePackItem(UI.rosterById(p2[0]),p2[1]);close(entry);sheet(UI.rosterById(p2[0]));}
     if(b.dataset.drop){var q=b.dataset.drop.split('|');Game.drop(UI.rosterById(q[0]),q[1]);close(entry);sheet(UI.rosterById(q[0]));}
+    if(b.dataset.prep){
+      var pp=b.dataset.prep.split('|'),op=pp[0],sp=pp[1];
+      c.prep=c.prep||{};
+      if(op==='+'){(c.prep[sp]=c.prep[sp]||0);c.prep[sp]++;}
+      else if(c.prep[sp]>1)c.prep[sp]--;else delete c.prep[sp];
+      close(entry);sheet(c);
+    }
   });
 }
 function createHero(){

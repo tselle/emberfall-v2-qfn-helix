@@ -801,6 +801,28 @@ function usePackItem(c,id){
   if(it.t==='d'){UI.toast('Its purpose waits for battle.');return false;}
   UI.toast('That is equipment, not a convenience.');return false;
 }
+function learnChance(c){return Rules.clamp(35+Rules.abilityScore(c,'int')*3,5,95);}
+function learnFromScroll(c,id,it){
+  var sp=it.spell,def=SPELLS[sp];
+  var acts=[{label:'Copy it into the spellbook ('+learnChance(c)+'%)',primary:1,on:function(){
+    G.time+=30;
+    if(Rules.play.chance(learnChance(c)/100)){
+      (c.book=c.book||[]).push(sp);
+      consumePack(c,id);
+      UI.log('good',UI.esc(c.name)+' copies '+UI.esc(def.n)+' into the spellbook; the scroll crumbles.');
+      Journal.note(c.name+' learned the spell '+def.n+'.','learn');
+      autosave();UI.hud();
+      if(UI.top()===null)UI.renderParty();
+    }else{
+      UI.log('bad','The notation swims and will not hold; '+UI.esc(c.name)+' keeps the unburned scroll.');
+    }
+  }}];
+  if(READABLE_HERE[sp])acts.push({label:'Just read it (cast, scroll lost)',on:function(){readScrollOut(c,id,it);}});
+  acts.push({label:'Not here, not now'});
+  UI.modal({title:'A scroll of '+def.n+' — unknown spell',
+    body:'<p class="muted">'+UI.esc(c.name)+' has this spell nowhere in the book. Reading it plain will spend the magic; copying it is a gamble of ink, hours, and the reader’s art ('+learnChance(c)+'%).</p>',
+    actions:acts});
+}
 function scrollSphereOK(c,sp){
   var def=SPELLS[sp];if(!def)return false;
   if(def.c==='M')return c.cls==='M';
@@ -809,6 +831,10 @@ function scrollSphereOK(c,sp){
 function readScrollOut(c,id,it){
   var sp=it.spell;
   if(!scrollSphereOK(c,sp)){UI.toast('The script squirms, unreadable to '+Rules.CLASSES[c.cls].name+'.');return false;}
+  // §spell economy: a mage before an unknown wizard scroll may try to copy it.
+  if(SPELLS[sp]&&SPELLS[sp].c==='M'&&c.cls==='M'&&(c.book||[]).indexOf(sp)<0){
+    learnFromScroll(c,id,it);return true;
+  }
   if(!READABLE_HERE[sp]){UI.toast('The parchment holds no purchase on the quiet.');return false;}
   var dead=sp==='raisedead'||sp==='resurrect';
   if(dead){
