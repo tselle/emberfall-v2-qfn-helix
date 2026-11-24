@@ -100,18 +100,62 @@ function step(){
   announce();
   if(contact)engage(contact);
 }
+/* creatures with a grammar and an appetite for coin may be talked to */
+function parleyable(def){
+  if(!def||def.undead)return false;
+  var tg=def.tags||[];
+  if(tg.indexOf('mindless')>=0||tg.indexOf('vermin')>=0||tg.indexOf('undead')>=0)return false;
+  return tg.indexOf('humanoid')>=0||tg.indexOf('giantkin')>=0||tg.indexOf('gnoll')>=0||tg.indexOf('cult')>=0;
+}
 function engage(band){
   var group=bands().filter(function(b){return b.map===mapId()&&Math.max(Math.abs(b.x-band.x),Math.abs(b.y-band.y))<=2;});
   var mons=group.map(function(b){return [b.mon,b.n];});
-  var unseen=group.every(function(b){return !wasSeen(b);});
-  UI.log('bad','Contact! '+monsText(mons));
-  Combat.start({
-    mons:mons,title:'Battle in the dark',
-    bands:group.map(function(b){return b.k;}),
-    partySurprise:unseen&&Rules.play.d6()<=2,
-    monsterSurprise:Rules.play.d6()<=2,
-    onEnd:function(r){Watch.removeKeys(group.map(function(b){return b.k;}));}
-  });
+  function fight(withMalice){
+    var unseen=group.every(function(b){return !wasSeen(b);});
+    UI.log('bad','Contact! '+monsText(mons));
+    Combat.start({
+      mons:mons,title:'Battle in the dark',
+      bands:group.map(function(b){return b.k;}),
+      partySurprise:unseen&&Rules.play.d6()<=2,
+      monsterSurprise:withMalice?true:Rules.play.d6()<=2,
+      onEnd:function(r){Watch.removeKeys(group.map(function(b){return b.k;}));}
+    });
+  }
+  var talkers=mons.every(function(pr){return parleyable(MONSTERS[pr[0]]);});
+  var live=UI.party().filter(function(c){return !c.dead&&c.hp>0;});
+  if(!talkers||!live.length){fight(false);return;}
+  var price=mons.reduce(function(a,pr){
+    var d=MONSTERS[pr[0]]||{hd:1};
+    return a+Math.max(5,Math.round((d.hd||1)*8)*pr[1]);
+  },0);
+  var face=live.slice().sort(function(a,b){return Rules.abilityScore(b,'cha')-Rules.abilityScore(a,'cha');})[0];
+  var need=9;
+  var mods=Rules.chaAdj(Rules.abilityScore(face,"cha"))|0;
+  var foes=mons.reduce(function(a,pr){return a+pr[1];},0);
+  if(live.length>foes)mods+=1;
+  UI.modal({title:'A live blade bars the way',
+    body:'<p>'+UI.esc(monsText(mons))+' have the way between you and violence, and one of them has stopped chewing.</p>'+
+      '<p class="muted">'+UI.esc(face.name)+' may try words ('+need+' on 2d6'+(mods?(mods>0?'+':'')+mods:'')+', or the road can be bought for '+price+' gp.)</p>',
+    actions:[
+    {label:'Stand and fight!',primary:1,on:function(){fight(false);}},
+    {label:'Parley — let word pass',on:function(){
+      var roll=Rules.play.d(2,6)+mods;
+      if(roll>=need){
+        UI.log('good','Grumbling and counting the odds, the band gives the road.');
+        Watch.removeKeys(group.map(function(b){return b.k;}));
+        Game.autosave();
+      }else{
+        UI.log('bad','Words curdle; the band closes with malice and first blood.');
+        fight(true);
+      }
+    }},
+    {label:'Pay '+price+' gp and walk on by',disabled:G.gold<price,on:function(){
+      G.gold-=price;
+      UI.log('dim',price+' gp changes hands; the blades lower and the purse does not.');
+      Watch.removeKeys(group.map(function(b){return b.k;}));
+      UI.hud();Game.autosave();
+    }},
+    {label:'Back away slowly',on:function(){UI.log('dim','You give them ground and manners both.');}}]});
 }
 /* remember what the party has been told is visible this visit */
 var seenKeys={};
