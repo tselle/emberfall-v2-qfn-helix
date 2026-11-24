@@ -549,13 +549,17 @@ function animMove(from,to,ms,done){
     if(finished)return;finished=true;
     X.cam.x=to.x+.5;X.cam.y=to.y+.5;renderView(1);done();
   }
+  var sc=0.5;   // motion scale; degrades further if frames run long
   function frame(){
     if(finished)return;
     var t=Math.min(1,(performance.now()-t0)/ms);
     X.cam.x=from.x+(to.x-from.x)*t+.5;
     X.cam.y=from.y+(to.y-from.y)*t+.5;
-    renderView(t<1?0.5:1);
-    if(t<1)requestAnimationFrame(frame);else fin();
+    if(t<1){
+      renderView(sc);
+      if(X.slowFrame&&sc>0.3)sc-=0.12;    // hold the ~24 ms frame budget
+      requestAnimationFrame(frame);
+    }else fin();
   }
   frame();
   setTimeout(fin,ms+600);   // finish-once fallback if rAF stalls
@@ -608,9 +612,33 @@ function svcBlurb(loc){
 
 /* ============ Rendering ============ */
 function renderView(scale){
-  if(!X||X.mode!=='local')return;
-  X.cam.x=X.cam.x;X.cam.y=X.cam.y;X.cam.dir=G.dir;
-  View3D.render(X.prep,X.cam,scale);
+  if(!X||X.mode!=='local')return 0;
+  X.cam.dir=G.dir;
+  var ms=View3D.render(X.prep,X.cam,scale,{entities:billEntities()});
+  X.slowFrame=ms>26;
+  return ms;
+}
+/* Billboards: sighted bands, stairs and discovered-but-unlooted treasure. */
+function billEntities(){
+  var ents=[];
+  if(!X)return ents;
+  try{
+    Watch.visible().forEach(function(b){
+      ents.push({x:b.x+.5,y:b.y+.5,spr:'mon:'+b.mon,tag:'×'+b.n});
+    });
+  }catch(e){}
+  var p=X.prep;
+  for(var y=0;y<p.h;y++)for(var x=0;x<p.w;x++){
+    var c=p.char[y*p.w+x];
+    var dd=(x-G.x)*(x-G.x)+(y-G.y)*(y-G.y);
+    if(dd>49)continue;
+    if(c==='<'){ents.push({x:x+.5,y:y+.5,spr:'stairU'});continue;}
+    if(c==='>'){ents.push({x:x+.5,y:y+.5,spr:'stairD'});continue;}
+    if(/[a-z]/.test(c)&&X.def.ev&&X.def.ev[c]&&X.def.ev[c].chest&&G.flags[G.map+':'+c]!=='done'){
+      if(seenRow(G.map,y)[x]==='1')ents.push({x:x+.5,y:y+.5,spr:'chest'});
+    }
+  }
+  return ents;
 }
 /* wipe: total field defeat — wake at daybreak, light of purse, bands gone */
 function wipe(){

@@ -14,7 +14,8 @@ function el(id){return document.getElementById(id);}
 
 /* ================= Start / finish ================= */
 function start(spec){
-  if(CB){UI.toast('A battle is already underway.');return;}
+  if(CB&&!CB.done){UI.toast('A battle is already underway.');return;}
+  CB=null;   // a finished board never blocks the next battle
   cv=el('combatCanvas');ctx=cv.getContext('2d');
   var indoor=!(MAPS[G.map]&&MAPS[G.map].overland);
   var obstacles=indoor?[{x:6,y:2},{x:7,y:2},{x:6,y:7},{x:7,y:7}]:seedRocks();
@@ -127,7 +128,7 @@ function resolve(result){
 /* ================= Initiative & turns ================= */
 function initOrder(){
   var us=[];
-  CB.pcs.forEach(function(p){if(!isDown(p))us.push({u:p,i:Rules.play.d6()+Rules.dexOf(p.c).misc});});
+  CB.pcs.forEach(function(p){if(!isDown(p))us.push({u:p,i:Rules.play.d6()+Rules.dexOf(p.c).ac});});   // DEX reaction
   CB.mons.forEach(function(m){if(standing(m))us.push({u:m,i:Rules.play.d6()});});
   us.sort(function(a,b){return b.i-a.i||((b.u.side==='p')?1:-1);});
   return us.map(function(x){return x.u;});
@@ -885,5 +886,6 @@ function autoAct(){
   if(CB&&CB.token===tk)endAct();
 }
 return{start:start,isActive:isActive,onKey:onKey,init:init,autoAct:autoAct,
-  _turn:function(){return CB&&CB.turn;},_cb:function(){return CB;}};
+  _turn:function(){return CB&&CB.turn;},_cb:function(){return CB;},
+  _clear:function(){if(CB&&CB.done)CB=null;}};
 })();

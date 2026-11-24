@@ -176,7 +176,11 @@ function advanceTo(c,lvl,rng){
 /* ---- Begin ---- */
 function begin(){
   if(!chosen.length){UI.toast('Choose at least one adventurer.');return;}
-  var m=MODULES[sel],rng=new Rules.RNG((Math.random()*0xffffffff)>>>0);
+  // Deterministic per campaign: the same module always yields the same
+  // starting party rolls, so assemblies and playtests are reproducible.
+  var m=MODULES[sel],mseed=2166136261;
+  for(var si=0;si<sel.length;si++)mseed=Math.imul(mseed^sel.charCodeAt(si),16777619)>>>0;
+  var rng=new Rules.RNG(mseed>>>0);
   var roster=[],partyIds=[];
   var startLvl=m.lvl;
   chosen.forEach(function(id){
@@ -447,7 +451,7 @@ function consumeQuestItem(q){
   if(!q.needItem)return;
   for(var i=0;i<G.party.length;i++){
     var c=UI.rosterById(G.party[i]);
-    if(!c||c.dead)continue;
+    if(!c)continue;   // the pack yields its prize, bearer or no bearer
     var j=c.inv.indexOf(q.needItem);
     if(j>=0){c.inv.splice(j,1);return;}
   }

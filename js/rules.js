@@ -30,7 +30,11 @@ var play={
   chance:function(p){return Math.random()<p;},
   pick:function(a){return a[Math.floor(Math.random()*a.length)];}
 };
-function setPlay(p){play=p;}
+function setPlay(p){
+  // Mutate the exported object: Rules.play is handed out by reference at
+  // export time, so rebinding the local would leave callers on Math.random.
+  for(var k in p)if(typeof p[k]==='function')play[k]=p[k];
+}
 
 /* Roll a dice spec: 'NdS', 'NdS+K', 'NdS-K', 'dS', or a plain number. */
 function dice(spec,rng){
