@@ -693,12 +693,16 @@ function paintMinimap(){
 }
 function openFullMap(){
   if(!X)return;
-  var body=UI.el('div');
-  var cv=document.createElement('canvas');cv.width=800;cv.height=600;
-  cv.style.cssText='width:100%;background:#0d0e13';
-  body.appendChild(cv);
-  View3D.minimap(X.prep,G.seen[G.map],G.x,G.y,G.dir,{canvas:cv,bands:bandPips()});
-  UI.modal({title:'Survey — '+((X.def&&X.def.name)||''),body:body,actions:[{label:'Close',primary:1}]});
+  var mapId=G.map;
+  GameMap.show({
+    def:X.def||MAPS[mapId],
+    prep:X.prep&&X.mapId===mapId?X.prep:View3D.prepare(MAPS[mapId]),
+    seen:G.seen[mapId],
+    x:G.x,y:G.y,dir:G.dir,
+    bands:bandPips(),
+    mapId:mapId,
+    wild:!!(MAPS[mapId]&&MAPS[mapId].overland)
+  });
 }
 function aheadText(){
   if(!X||!G)return '';
