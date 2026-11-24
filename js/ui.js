@@ -315,7 +315,59 @@ function help(){
    '<p><b>Advancement:</b> XP is shared by survivors with a +10% prime-requisite bonus; levels are taken at the training hall for 100 gp × level, one level per training.</p>'+
    '<p><b>Campaign:</b> from a safe town, the menu\u2019s Campaign sends the company on to another adventure; the world keeps its gates, chests and deeds.</p>'});
 }
+/* ============ Hover tooltips ============ */
+/* iPadOS Safari shows no native title tooltips, even with a trackpad.
+   One delegated pointer layer renders them ourselves; the title is moved
+   to data-tip on first hover (aria-label keeps the accessible name). */
+var tipNode=null,tipTimer=null,tipFor=null;
+function tipLazy(){if(!tipNode){tipNode=document.createElement('div');tipNode.id='ui-tip';tipNode.setAttribute('aria-hidden','true');document.body.appendChild(tipNode);}return tipNode;}
+function tipElAt(e){var t=e.target;return(t&&t.closest)?t.closest('[title],[data-tip]'):null;}
+function tipTextOf(el){
+  if(el.getAttribute('data-tip')!=null)return el.getAttribute('data-tip');
+  var t=el.getAttribute('title');
+  if(t){el.setAttribute('data-tip',t);el.removeAttribute('title');
+    if(!el.getAttribute('aria-label'))el.setAttribute('aria-label',t);}
+  return t;
+}
+function tipPlace(x,y){var n=tipLazy();var r=n.getBoundingClientRect();
+  var L=x+14,T=y+18;
+  if(L+r.width>window.innerWidth-8)L=Math.max(8,x-r.width-10);
+  if(T+r.height>window.innerHeight-8)T=Math.max(8,y-r.height-14);
+  n.style.left=L+'px';n.style.top=T+'px';}
+function tipShowFor(el,x,y){
+  var n=tipLazy();n.textContent=tipTextOf(el)||'';
+  if(!n.textContent){tipHide();return;}
+  n.classList.add('on');tipPlace(x,y);tipFor=el;}
+function tipHide(){if(tipTimer){clearTimeout(tipTimer);tipTimer=null;}
+  if(tipNode)tipNode.classList.remove('on');tipFor=null;}
+document.addEventListener('pointermove',function(e){
+  if(e.pointerType!=='mouse'&&e.pointerType!=='pen')return;
+  var el=tipElAt(e);var text=el?tipTextOf(el):null;
+  if(!text){if(tipFor)tipHide();return;}
+  if(el!==tipFor){
+    tipFor=el;if(tipTimer)clearTimeout(tipTimer);
+    tipTimer=setTimeout(function(){if(tipFor===el)tipShowFor(el,e.clientX,e.clientY);},90);
+    if(tipNode)tipNode.classList.remove('on');
+  }else if(tipNode&&tipNode.classList.contains('on'))tipPlace(e.clientX,e.clientY);
+},true);
+document.addEventListener('pointerout',function(e){
+  if(e.pointerType!=='mouse'&&e.pointerType!=='pen')return;
+  var el=tipElAt(e);if(!el||el!==tipFor)return;
+  if(e.relatedTarget&&el.contains&&el.contains(e.relatedTarget))return;
+  tipHide();
+},true);
+var tipLastPT=null;
+document.addEventListener('pointerdown',function(e){tipLastPT=e.pointerType;tipHide();},true);
+document.addEventListener('focusin',function(e){
+  if(tipLastPT==='touch')return;   // taps must not pin a tooltip
+  var el=tipElAt(e);if(!el)return;
+  var r=el.getBoundingClientRect();tipShowFor(el,r.left+r.width/2,r.top);
+},true);
+document.addEventListener('focusout',tipHide,true);
+if(window.addEventListener){window.addEventListener('blur',tipHide);window.addEventListener('scroll',tipHide,true);}
+document.addEventListener('keydown',function(e){if(e.key==='Escape')tipHide();},true);
+
 return{el:el,esc:esc,$:$,modal:modal,close:close,closeAll:closeAll,top:top,toast:toast,log:log,
-  hud:hud,party:party,rosterById:rosterById,colorOf:colorOf,renderParty:renderParty,toggleParty:toggleParty,initPartyPref:initPartyPref,closeTop:closeTop,
+  hud:hud,party:party,rosterById:rosterById,colorOf:colorOf,renderParty:renderParty,toggleParty:toggleParty,initPartyPref:initPartyPref,closeTop:closeTop,tipHide:tipHide,
   sheet:sheet,createHero:createHero,saveDialog:saveDialog,loadDialog:loadDialog,menu:menu,help:help};
 })();

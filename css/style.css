@@ -170,3 +170,11 @@ h1,h2,h3{font-weight:normal;letter-spacing:.04em}
 @media (prefers-reduced-motion:reduce){
   #party{transition:none}
 }
+
+/* ---- hover tooltip layer (ui.js) ---- */
+#ui-tip{position:fixed;left:0;top:0;z-index:140;max-width:300px;pointer-events:none;
+  background:#171922f5;border:1px solid #c99b3f;border-radius:6px;color:#e9e2cf;
+  padding:6px 10px;font:13px/1.45 Georgia,'Times New Roman',serif;
+  box-shadow:0 6px 18px rgba(0,0,0,.55);
+  opacity:0;transform:translateY(3px);transition:opacity .12s ease,transform .12s ease}
+#ui-tip.on{opacity:1;transform:none}
