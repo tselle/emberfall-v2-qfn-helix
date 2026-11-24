@@ -26,7 +26,7 @@ function modal(opts){
     b.onclick=function(){if(a.on)a.on(entry);if(a.keepOpen)return;close(entry);};
     bar.appendChild(b);
   });
-  if(opts.closable!==false){var x=el('button',null,'Esc');x.onclick=function(){close(entry);};bar.appendChild(x);}
+  if(opts.closable!==false){var x=el('button',null,'Esc');x.title='Close';x.onclick=function(){close(entry);};bar.appendChild(x);}
   m.appendChild(bar);
   back.addEventListener('click',function(){if(entry.closable)close(entry);});
   host.appendChild(back);host.appendChild(m);
@@ -100,6 +100,7 @@ function renderParty(){
   party().forEach(function(c,idx){
     var row=el('div','mrow'+(c.dead?' dead':''));
     var pc=el('canvas');pc.width=44;pc.height=52;
+    pc.title=c.name+' — '+Rules.RACES[c.race].name+' '+Rules.CLASSES[c.cls].name+' · '+c.hp+'/'+c.maxhp+' hp';
     Figures.portrait(c,pc);
     row.appendChild(pc);
     var col=el('div','mcol');
@@ -172,9 +173,9 @@ function sheet(c){
   var inv=(c.inv||[]).map(function(id){var it=item(id);return it?'<div class=item><span>'+esc(it.n)+
     (it.chargesLeft!=null?' <span class=muted>'+it.chargesLeft+' chr</span>':'')+
     '</span><span class="acts">'+
-    (it.t==='w'||it.t==='a'||it.t==='s'||it.t==='r'||it.t==='g'?'<button data-eq="'+c.id+'|'+id+'">Wear</button>':'')+
-    (it.t==='p'||it.t==='x'||it.t==='d'?'<button data-use="'+c.id+'|'+id+'">Use</button>':'')+
-    (it.t==='q'?'':'<button data-drop="'+c.id+'|'+id+'">Drop</button>')+'</span></div>':'';}).join('')||'<span class=muted>Empty pack</span>';
+    (it.t==='w'||it.t==='a'||it.t==='s'||it.t==='r'||it.t==='g'?'<button data-eq="'+c.id+'|'+id+'" title="'+esc(it.n)+' — equip and ready it">Wear</button>':'')+
+    (it.t==='p'||it.t==='x'||it.t==='d'?'<button data-use="'+c.id+'|'+id+'" title="'+esc(it.n)+' — drink, read or trigger it now">Use</button>':'')+
+    (it.t==='q'?'':'<button data-drop="'+c.id+'|'+id+'" title="'+esc(it.n)+' — leave it in the pack pile">Drop</button>')+'</span></div>':'';}).join('')||'<span class=muted>Empty pack</span>';
   // Mage spellbook: re-prepare choices freely — ready (mem) copies never move until rest.
   var prepHtml='';
   if(c.cls==='M'&&c.book&&c.book.length){
@@ -185,8 +186,8 @@ function sheet(c){
       var used=0;Object.keys(c.prep||{}).forEach(function(s){if(SPELLS[s]&&SPELLS[s].l===def.l)used+=c.prep[s];});
       var room=(slots3[def.l-1]||0)-used;
       prepHtml+='<div class=item><span>'+esc(def.n)+' <span class=muted>ring '+def.l+' · ready '+mem3+' · laid out '+prep+(room>0?' · '+(def.l)+'-ring room '+room:'')+'</span></span><span class="acts">'+
-        '<button data-prep="+|'+sp+'"'+(room<=0?' disabled':'')+'>Prepare</button>'+
-        (prep>0?'<button data-prep="-|'+sp+'">Unprepare</button>':'')+'</span></div>';
+        '<button data-prep="+|'+sp+'"'+(room<=0?' disabled title="No room left in ring '+def.l+'"':' title="Lay out one more copy for the next rest"')+'>Prepare</button>'+
+        (prep>0?'<button data-prep="-|'+sp+'" title="Put this copy back in the book">Unprepare</button>':'')+'</span></div>';
     });
   }
   var wrap=el('div');
