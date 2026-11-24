@@ -281,7 +281,393 @@ function travel(moduleId){
   Game.autosave();
   Game.hud();
 }
-function chooseBack(){Game.title();}
+/* ================= Town services ================= */
+function giver(){var m=MODULES[G.module];return (m.names&&m.names.hall)||'the hall';}
+function modKey(){var m=MODULES[G.module];return m.rumors||G.module;}
+function partyLive(){return UI.party().filter(function(c){return !c.dead&&c.hp>0;});}
+
+function openService(loc){
+  switch(loc.svc){
+    case 'inn':return inn(loc);
+    case 'tavern':return tavern(loc);
+    case 'temple':return temple(loc);
+    case 'hall':return hall(loc);
+    case 'training':return training(loc);
+    case 'armory':case 'general':case 'apothecary':return shop(loc);
+    default:UI.toast('The door is business, but not yours today.');
+  }
+}
+
+/* ---- Inn: 1 gp/member/night, wake 07:00, +3 hp, restore spells/hands ---- */
+function restNight(){
+  var cost=UI.party().length;
+  if(G.gold<cost){UI.toast('The purse will not stretch that far.');return false;}
+  G.gold-=cost;
+  var day=Math.floor(G.time/1440);
+  var wake=(day+1)*1440+7*60;
+  G.time=wake>G.time?wake:G.time+1;
+  G.march=0;
+  UI.party().forEach(function(c){
+    if(c.dead)return;
+    if(c.hp>0)c.hp=Math.min(c.maxhp,c.hp+3);
+    spendCuresOnWounded(c);
+    if(c.prep&&c.mem)Object.keys(c.prep).forEach(function(s){c.mem[s]=c.prep[s];});
+    c.layUsed=false;c.fx={};
+  });
+  UI.log('good','A bed, a basin, and dawn at the window: the company wakes at 07:00.');
+  Game.autosave();UI.hud();UI.renderParty();
+  return true;
+}
+function spendCuresOnWounded(c){
+  // healers spend remaining prepared cures on the worst hurt before re-memorizing
+  if(!c.prep)return;
+  var hurt=UI.party().filter(function(p){return !p.dead&&p.hp<p.maxhp;}).sort(function(a,b){return a.hp/a.maxhp-b.hp/b.maxhp;});
+  if(!hurt.length)return;
+  ['clw','csw','ccw','heal'].forEach(function(sid){
+    while((c.prep[sid]||0)>0&&(c.mem[sid]||0)>0){
+      var w=hurt.find(function(p){return p.hp<p.maxhp;});if(!w)return;
+      var amt=Rules.dice(sid==='clw'?'1d8':sid==='csw'?'2d8+1':sid==='ccw'?'3d8+3':'999');
+      w.hp=Math.min(w.maxhp,w.hp+amt);
+      if(sid!=='heal')c.mem[sid]--;else c.prep[sid]=0,c.mem[sid]=0;
+      UI.log('spell',UI.esc(c.name)+' prays '+SPELLS[sid].n+' over '+UI.esc(w.name)+' (+'+amt+' hp).');
+      if((c.mem[sid]||0)<=0)break;
+    }
+  });
+}
+function inn(loc){
+  var cost=UI.party().length;
+  UI.modal({title:loc.name,body:
+    '<p>'+svcBlurb('inn')+'</p><p>Beds are <b>'+cost+' gp</b> a night for the company, breakfast at seven.</p>'+
+    '<p class="muted">The purse holds '+G.gold+' gp.</p>',
+    actions:[
+    {label:'Take the beds ('+cost+' gp)',primary:1,disabled:G.gold<cost,on:function(en){restNight();}},
+    {label:'Rest until healed',disabled:G.gold<cost,title:'Healers spend their prepared cures each morning',on:function(en){
+      var nights=0;
+      while(nights<60){
+        var hurt=UI.party().some(function(c){return !c.dead&&c.hp<c.maxhp&&c.hp>0;});
+        if(!hurt||G.gold<cost)break;
+        restNight();nights++;
+      }
+      UI.log('dim',nights?(nights+' nights of beds and broth later.'):'No one needed the beds.');
+    }},
+    {label:'Come away'}]});
+}
+function svcBlurb(s){
+  return {inn:'Warmth, beds and rumours behind the bar.',tavern:'A long room going quietly loud.',
+    armory:'Steel hung in ranks, oiled and honest.',general:'Shelves of cord, cure and small mercies.',
+    apothecary:'Bottles, simples and the smell of camphor.',temple:'The Dawn\u2019s quiet, and water that helps.',
+    hall:'The board, the ledger, and the work of the place.',training:'A yard of sawdust, straw and consequence.'}[s]||'A door of business.';
+}
+
+/* ---- Tavern: 2 gp for a round and a rumour ---- */
+function tavern(loc){
+  var key=modKey(),list=RUMORS[key]||[];
+  if(!G.rumors)G.rumors={};
+  var seen=G.rumors[key]||0;
+  var body=UI.el('div');
+  body.innerHTML='<p>'+svcBlurb('tavern')+' A round costs <b>2 gp</b>.</p>'+
+    (seen>=list.length?'<p class="muted">The talk has turned to weather and prices.</p>':'<p class="muted">Someone at the long table is mid-story.</p>');
+  UI.modal({title:loc.name,body:body,actions:[
+    {label:'Buy a round (2 gp)',primary:1,disabled:G.gold<2||seen>=list.length,on:function(){
+      G.gold-=2;G.rumors[key]=seen+1;
+      var r=list[seen];
+      UI.log('spell','Rumour: '+UI.esc(r));
+      Journal.note('Tavern rumour: '+r,'rumor');
+      Game.autosave();UI.hud();
+      UI.toast('The company has heard it now; buy elsewhere or later.');
+    }},
+    {label:'Nurse a dry cup'}]});
+}
+
+/* ---- Temple ---- */
+function temple(loc){
+  var dead=UI.party().filter(function(c){return c.dead&&!c.lost;});
+  var poisoned=UI.party().filter(function(c){return c.poison&&!c.dead;});
+  var hurt=UI.party().filter(function(c){return !c.dead&&c.hp<c.maxhp;});
+  var entry;
+  function svcRow(label,price,enabled,why,on){
+    var row=UI.el('div','item');
+    row.innerHTML='<span>'+UI.esc(label)+' <b>'+price+' gp</b></span>';
+    var acts=UI.el('span','acts');
+    var b=UI.el('button',null,'Do it');b.disabled=!enabled||G.gold<price;b.title=enabled?(G.gold<price?'Not enough gold':''):why;
+    b.onclick=on;acts.appendChild(b);row.appendChild(acts);return row;
+  }
+  function render(){
+    var body=UI.el('div');
+    body.innerHTML='<p>'+svcBlurb('temple')+' The purse holds '+G.gold+' gp.</p>';
+    if(hurt.length)body.appendChild(svcRow('Cure light wounds on the worst hurt',20,true,'',function(){
+      G.gold-=20;var w=hurt.sort(function(a,b){return a.hp/a.maxhp-b.hp/b.maxhp;})[0];
+      w.hp=Math.min(w.maxhp,w.hp+Rules.dice('1d8'));UI.log('spell','The temple cures '+UI.esc(w.name)+'.');re();
+    }));
+    if(hurt.length>1)body.appendChild(svcRow('Cure serious wounds on the worst hurt',60,true,'',function(){
+      G.gold-=60;var w=hurt.sort(function(a,b){return a.hp/a.maxhp-b.hp/b.maxhp;})[0];
+      w.hp=Math.min(w.maxhp,w.hp+Rules.dice('2d8+1'));UI.log('spell','The temple mends '+UI.esc(w.name)+'.');re();
+    }));
+    if(poisoned.length)body.appendChild(svcRow('Neutralize poison ('+poisoned[0].name+')',80,true,'',function(){
+      G.gold-=80;poisoned[0].poison=null;UI.log('good',UI.esc(poisoned[0].name)+' is cleansed.');poisoned=poisoned.filter(function(){return false;});re();
+    }));
+    if(dead.length)body.appendChild(svcRow('Raise dead ('+dead[0].name+')',400,!dead[0].lost,'That spirit is beyond recall',function(){
+      G.gold-=400;var c=dead.shift();
+      var roll=Rules.play.d20(),need=Rules.abilityScore(c,'con');
+      if(roll<=need){c.dead=false;c.hp=1;c.scores.con=Math.max(3,c.scores.con-1);c.hp=1;
+        UI.log('good',UI.esc(c.name)+' comes back at a whisper of life (CON '+roll+' \u2264 '+need+').');
+        Journal.note(c.name+' was raised at the temple.','raise');}
+      else{c.lost=true;UI.log('bad','The rite fails (CON '+roll+' > '+need+'). '+UI.esc(c.name)+'\u2019s spirit is beyond ordinary recall.');}
+      re();
+    }));
+    if(!hurt.length&&!poisoned.length&&!dead.length)body.innerHTML+='<p class="muted">The temple has no work for you today. (It will cure, cleanse, and — for a price and a CON test — call back the fallen.)</p>';
+    return body;
+  }
+  function re(){Game.autosave();UI.hud();if(entry){entry.body.innerHTML='';entry.body.appendChild(render());}}
+  entry=UI.modal({title:loc.name,body:render(),actions:[{label:'Come away',primary:1}]});
+}
+
+/* ---- Hall: pay reportable work, then offer the next ---- */
+function questDoneEvent(qid){
+  var mod=MODULES[G.module],found=false;
+  mod.maps.forEach(function(mid){var mm=MAPS[mid];if(!mm)return;
+    Object.keys(mm.ev||{}).forEach(function(k){
+      var e=mm.ev[k];
+      if(e.enc&&e.enc.quest===qid&&G.flags[mid+':'+k]==='done')found=true;});});
+  return found;
+}
+function questCarried(q){
+  if(!q.needItem)return true;
+  if(!questDoneEvent(q.__id)){
+    // deed-event placement (items granted by text events)
+    var placed=false;
+    MODULES[G.module].maps.forEach(function(mid){var mm=MAPS[mid];if(!mm||mm.overland)return;
+      Object.keys(mm.ev||{}).forEach(function(k){var e=mm.ev[k];
+        if(e.text&&e.items&&e.items.indexOf(q.needItem)>=0&&G.flags[mid+':'+k]==='done')placed=true;});});
+    if(!placed)return false;
+  }
+  return UI.party().some(function(c){return !c.dead&&c.inv.indexOf(q.needItem)>=0;});
+}
+function consumeQuestItem(q){
+  if(!q.needItem)return;
+  for(var i=0;i<G.party.length;i++){
+    var c=UI.rosterById(G.party[i]);
+    if(!c||c.dead)continue;
+    var j=c.inv.indexOf(q.needItem);
+    if(j>=0){c.inv.splice(j,1);return;}
+  }
+}
+function payQuest(qid){
+  var q=QUESTS[qid];
+  G.quests[qid].done=1;
+  G.gold+=q.gold;
+  var each=Math.max(5,5*Math.round(q.xp*0.25/5));
+  UI.party().forEach(function(c){
+    if(c.dead)return;
+    var amt=Rules.xpAward(c,each);
+    c.xp+=amt;
+  });
+  UI.log('gold',giver()+' pays '+q.gold+' gp, and '+each+' XP each for “'+UI.esc(q.name)+'”.');
+  Journal.note('Reported “'+q.name+'” — paid '+q.gold+' gp.','report');
+  if(q.final){
+    G.won=true;
+    if(G.done.indexOf(G.module)<0)G.done.push(G.module);
+    Journal.note('Module complete: '+MODULES[G.module].name+'.','complete');
+  }
+  Game.autosave();UI.hud();
+}
+function hall(loc){
+  var mod=MODULES[G.module];
+  var reportable=Journal.commissions().filter(function(x){return x.reportable;});
+  // final commission paid last among reportable
+  reportable.sort(function(a,b){return (a.q.final?1:0)-(b.q.final?1:0);});
+  var body=UI.el('div');
+  body.innerHTML='<p>'+svcBlurb('hall')+' '+UI.esc(giver())+' is at the board.</p>';
+  if(reportable.length){
+    reportable.forEach(function(x){
+      var row=UI.el('div','item');
+      row.innerHTML='<span><b>'+UI.esc(x.q.name)+'</b><br><span class=muted>'+UI.esc(x.q.done)+'</span></span>'+
+        '<span class=gold>'+x.q.gold+' gp · XP</span>';
+      body.appendChild(row);
+    });
+    body.appendChild(UI.el('p','gold','Report it all?'));
+  }
+  UI.modal({title:loc.name+' — '+giver(),body:body,actions:
+    reportable.length?[{label:'Report and collect',primary:1,on:function(){
+      reportable.forEach(function(x){consumeQuestItem(x.q);payQuest(x.id);});
+      var fin=reportable.some(function(x){return x.q.final;});
+      if(fin)epilogue();else offersLoop(mod);
+    }}]:[],closable:true});
+  if(!reportable.length)offersLoop(mod);
+}
+function offersLoop(mod){
+  var all=mod.quests.concat(mod.side||[]);
+  var next=all.find(function(qid){return !G.quests[qid];});
+  if(!next){UI.toast('The board is empty for now; the work you know is work you owe.');return;}
+  var q=QUESTS[next];
+  UI.modal({title:giver()+' offers a commission',body:
+    '<p><b>'+UI.esc(q.name)+'</b> '+(q.side?'<span class=muted>side</span>':'<span class=gold>main</span>')+'</p>'+
+    '<p>'+UI.esc(q.lead)+'</p><p class=spell>'+UI.esc(q.goal)+'</p>'+
+    '<p>'+UI.esc(q.offer)+'</p>',
+    actions:[
+      {label:'Accept',primary:1,on:function(){
+        G.quests[next]={offered:1,t:G.time};
+        UI.log('gold','Accepted: '+UI.esc(q.name)+'.');
+        Journal.note('Commission accepted: '+q.name+'. — “'+q.goal+'"','quest');
+        Game.autosave();
+        offersLoop(mod);   // offer the rest in sequence
+      }},
+      {label:'Not now'}]});
+}
+function epilogue(){
+  var mod=MODULES[G.module];
+  var next=mod.next&&MODULES[mod.next];
+  var more=next&&G.done.indexOf(mod.next)<0;
+  UI.modal({title:mod.code+' complete — '+mod.name,closable:false,body:
+    '<p>'+UI.esc(mod.victory)+'</p>'+
+    (more?'<p class=muted>'+UI.esc(next.code)+': '+UI.esc(next.name)+' awaits beyond the maps you know.</p>':'<p class=muted>The named saga is ended; the generated roads remain.</p>'),
+    actions:[
+      more?{label:'Set out →',primary:1,on:function(){travelMenu();}}:{label:'Stay a while',primary:!more}]});
+}
+
+/* ---- Training hall ---- */
+function training(loc){
+  var body=UI.el('div');
+  function trainRow(c){
+    var row=UI.el('div','item');
+    var cost=Rules.trainCost(c.lvl);
+    row.innerHTML='<span><b>'+UI.esc(c.name)+'</b> <span class=muted>'+Rules.CLASSES[c.cls].name+' '+c.lvl+' → '+(c.lvl+1)+'</span><br>'+
+      '<span class=muted>'+c.xp+' / '+Rules.nextXP(c)+' xp · '+cost+' gp</span></span>';
+    var acts=UI.el('span','acts');
+    var b=UI.el('button',null,'Train');b.disabled=!Rules.canTrain(c)||G.gold<cost;
+    b.title=!Rules.canTrain(c)?'Not enough XP yet':(G.gold<cost?'Not enough gold':'');
+    b.onclick=function(){
+      G.gold-=cost;
+      var before={lvl:c.lvl,hp:c.maxhp};
+      var rng=new Rules.RNG((Math.random()*0xffffffff)>>>0);
+      Rules.gainLevel(c,rng);
+      UI.log('good',UI.esc(c.name)+' trains to level '+c.lvl+' (+'+(c.maxhp-before.hp)+' hp).');
+      if(c.cls==='M')pickMageSpell(c);
+      else{if(c.prep&&c.mem)Object.keys(c.prep).forEach(function(s){c.mem[s]=c.prep[s];});Game.autosave();render2();}
+    };
+    acts.appendChild(b);row.appendChild(acts);return row;
+  }
+  function render2(){
+    var b=UI.el('div');
+    b.innerHTML='<p>'+svcBlurb('training')+' Training is <b>100 gp × level</b>, one level per session, XP earned in the field.</p><p class=muted>The purse holds '+G.gold+' gp.</p>';
+    var any=UI.party().some(function(c){return !c.dead&&c.lvl<20;});
+    UI.party().forEach(function(c){if(!c.dead&&c.lvl<20)b.appendChild(trainRow(c));});
+    if(!any)b.innerHTML+='<p class=muted>No one in the company can learn more today.</p>';
+    return b;
+  }
+  var entry=UI.modal({title:loc.name,body:render2(),actions:[{label:'Leave the yard',primary:1}]});
+  // re-render helper for mage spell choice completion
+  entry._re=render2;
+}
+function pickMageSpell(c){
+  var known=c.book||[];
+  var maxL=Rules.maxRing('M',c.lvl);
+  var pool=Object.keys(SPELLS).filter(function(s){return SPELLS[s].c==='M'&&SPELLS[s].l<=maxL&&known.indexOf(s)<0;});
+  if(!pool.length){Game.autosave();UI.hud();return;}
+  var selEl=UI.el('select');selEl.style.cssText='background:#10121a;border:1px solid var(--edge2);color:var(--ink);padding:6px;width:100%;font:inherit';
+  pool.sort(function(a,b){return SPELLS[a].l-SPELLS[b].l||SPELLS[a].n.localeCompare(SPELLS[b].n);})
+    .forEach(function(s){var o=document.createElement('option');o.value=s;o.textContent='Ring '+SPELLS[s].l+' — '+SPELLS[s].n;selEl.appendChild(o);});
+  var body=UI.el('div');
+  body.appendChild(UI.el('p',null,UI.esc(c.name)+' copies one new spell from the abacus of rings you can now reach.'));
+  body.appendChild(selEl);
+  UI.modal({title:'A new spell for the book',closable:false,body:body,actions:[
+    {label:'Copy it',primary:1,on:function(){
+      known.push(selEl.value);
+      if(!c.prep)c.prep={};if(!c.mem)c.mem={};
+      var ring=SPELLS[selEl.value].l;
+      var slots=Rules.slotsFor('M',c.lvl,Rules.abilityScore(c,'int'));
+      if((slots[ring-1]||0)>0&&!c.prep[selEl.value])c.prep[selEl.value]=1;
+      UI.log('spell',UI.esc(c.name)+' copies '+SPELLS[selEl.value].n+' into the book.');
+      Game.autosave();UI.hud();
+    }}]});
+}
+
+/* ---- Shops ---- */
+function classOK(c,it){
+  if(!it)return false;
+  if(it.t==='a'||it.t==='s'){
+    if(c.cls==='M')return false;                    // mages: no armor, no shield
+    if(c.cls==='T'&&it.ac<7)return false;           // thieves: leather at best
+    if(c.cls==='R'&&it.ac<6)return false;           // rangers: up to studded
+  }
+  if(it.t==='w'||it.t==='r'){
+    if(c.cls==='M')return ['dagger','staff','dart','sling'].indexOf(it.id)>=0;
+    if(c.cls==='C')return ['mace','flail','warhammer','club','quarterstaff'].indexOf(it.id)>=0;
+    if(c.cls==='T')return ['bastardsword','twohandsword','battleaxe','spear','poleaxe','falchion','halberd'].indexOf(it.id)<0;
+  }
+  return true;
+}
+function shopStock(loc){
+  var m=MODULES[G.module];
+  var key=(m.shops&&m.shops[loc.svc])||loc.svc;
+  var s=SHOPS[key];
+  if(!s){ // fall back to kind default
+    s=SHOPS[loc.svc]||{stock:[],name:loc.name};
+  }
+  return s;
+}
+function shop(loc){
+  var stock=shopStock(loc);
+  var buyer=UI.party().find(function(c){return !c.dead;});
+  var body=UI.el('div');
+  var entry;
+  function render(){
+    var b=UI.el('div');
+    var buyers=UI.party().filter(function(c){return !c.dead;});
+    var sel=UI.el('select');sel.style.cssText='background:#10121a;border:1px solid var(--edge2);color:var(--ink);padding:6px;font:inherit';
+    buyers.forEach(function(c){var o=document.createElement('option');o.value=c.id;o.textContent=c.name+' ('+Rules.CLASSES[c.cls].name+')';if(buyer&&c.id===buyer.id)o.selected=1;sel.appendChild(o);});
+    sel.onchange=function(){buyer=UI.rosterById(sel.value);entry.body.innerHTML='';entry.body.appendChild(render());};
+    var kv=UI.el('div','kv');kv.appendChild(UI.el('b',null,'Buyer'));
+    var holder=UI.el('span');kv.appendChild(holder);b.appendChild(kv);
+    holder.appendChild(sel);
+    b.appendChild(UI.el('p','muted','Purse '+G.gold+' gp — prices; sale is half price, gems and jewelry full.'));
+    b.appendChild(UI.el('h3',null,'Stock'));
+    (stock.stock||[]).forEach(function(id){
+      var it=item(id);if(!it)return;
+      var ok=buyer?classOK(buyer,it):true;
+      var row=UI.el('div','item');
+      row.innerHTML='<span>'+(ok?'':'<span style="color:var(--bad)">✕ </span>')+UI.esc(it.n)+' <span class=muted>'+(it.d||it.ac!=null?'':'')+'</span></span><span class=gold>'+it.price+' gp</span>';
+      var acts=UI.el('span','acts');
+      var buy=UI.el('button',null,'Buy');
+      buy.disabled=!ok||G.gold<it.price;
+      buy.title=!ok?'Not for '+((buyer&&Rules.CLASSES[buyer.cls].name)||'this class'):(G.gold<it.price?'Not enough gold':'');
+      buy.onclick=function(){
+        if(!buyer)return;
+        G.gold-=it.price;
+        buyer.inv.push(id);
+        UI.log('good',UI.esc(buyer.name)+' buys '+UI.esc(it.n)+'.');
+        // auto-equip if the slot is empty and it is wearable
+        var slot=it.t==='w'?'melee':it.t==='r'?'missile':it.t==='a'?'armor':it.t==='s'?'shield':(it.t==='g'?'charm':null);
+        if(slot&&ok&&!buyer.eq[slot]){buyer.eq[slot]=id;buyer.inv.splice(buyer.inv.indexOf(id),1);UI.log('dim','Worn at once.');}
+        Game.autosave();UI.hud();entry.body.innerHTML='';entry.body.appendChild(render());
+      };
+      acts.appendChild(buy);row.appendChild(acts);b.appendChild(row);
+    });
+    if(buyer){
+      b.appendChild(UI.el('h3',null,'Sell from '+UI.esc(buyer.name)+'\u2019s pack'));
+      var pack=buyer.inv.map(function(id,i){
+        var it=item(id);if(!it)return '';
+        if(it.t==='q')return '<div class=item><span class=q>'+UI.esc(it.n)+' <span class=muted>(quest — unsellable)</span></span></div>';
+        var worth=it.t==='v'?it.price:Math.floor((it.price||0)/2);
+        if(!worth)return '<div class=item><span>'+UI.esc(it.n)+' <span class=muted>(no market)</span></span></div>';
+        return '<div class=item><span>'+UI.esc(it.n)+'</span><span class="acts"><span class=gold>'+worth+' gp</span><button data-sell="'+id+'">Sell</button></span></div>';
+      }).join('')||'<p class=muted>Nothing to sell.</p>';
+      var sellWrap=UI.el('div');sellWrap.innerHTML=pack;
+      sellWrap.addEventListener('click',function(e){
+        var btn=e.target.closest('button[data-sell]');if(!btn)return;
+        var id=btn.dataset.sell,j=buyer.inv.indexOf(id);if(j<0)return;
+        var it=item(id);var worth=it.t==='v'?it.price:Math.floor((it.price||0)/2);
+        buyer.inv.splice(j,1);G.gold+=worth;
+        UI.log('dim','Sold '+UI.esc(it.n)+' for '+worth+' gp.');
+        Game.autosave();UI.hud();entry.body.innerHTML='';entry.body.appendChild(render());
+      });
+      b.appendChild(sellWrap);
+    }
+    return b;
+  }
+  entry=UI.modal({title:stock.name||loc.name,body:render(),actions:[{label:'Close',primary:1}]});
+}
+
 return{choose:choose,assemble:assemble,begin:begin,importCompany:importCompany,
-  addCustom:addCustom,travelMenu:travelMenu,travel:travel,get sel(){return sel;}};
+  addCustom:addCustom,travelMenu:travelMenu,travel:travel,openService:openService,get sel(){return sel;}};
 })();

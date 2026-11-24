@@ -145,6 +145,7 @@ function enterMap(mapId,x,y,dir,opts){
   if(!def){UI.toast('That way leads nowhere (map missing).');return;}
   X={mapId:mapId,def:def,prep:View3D.prepare(effMap(mapId)),busy:false,pending:null,
      skipStairs:!opts.restoring,prompted:{},mode:def.overland?'wild':'local',cam:{x:x+.5,y:y+.5,dir:dir}};
+  Watch.forget();
   G.map=mapId;G.x=x;G.y=y;G.dir=dir;
   // canvas mode switching
   document.getElementById('view3d').classList.toggle('hidden',X.mode==='wild');
@@ -197,17 +198,14 @@ function arrivalSeq(){
       // a marked trap can be stepped around
     }
   }
-  // wandering roll (authored tables)
+  // wandering roll (authored tables) — spawn as watch bands
   var wander=X.def.wander;
-  if(wander&&wander.length&&!X.def.safe){
+  if(wander&&wander.length&&!X.def.safe&&!X.noWanderRoll){
     var w=pickWander(wander);
-    if(w){
-      UI.log('bad','Wandering foes find you: '+monsText(w.mons));
-      Bestiary.sight(w.mons[0][0]);
-      UI.toast('Wandering battle — the tactical board arrives with the combat milestone.');
-    }
+    if(w)Watch.spawn(w.mons);
   }
 }
+function bandPips(){try{return Watch.visible();}catch(e){return[];}}
 function pickWander(list){
   var r=Math.random();
   for(var i=0;i<list.length;i++){if(r<list[i].p)return list[i];r-=list[i].p;}
@@ -223,20 +221,23 @@ function doStairs(st){
 function eventModal(ch,ev,key){
   if(ev.enc){
     UI.modal({title:'Set battle',closable:false,body:'<p>'+UI.esc(ev.enc.text||'A fight is upon you.')+'</p>'+
-      '<p class="muted">'+UI.esc(monsText(ev.enc.mons))+'</p>'+
-      '<p class="muted">The tactical board arrives with the combat milestone; this battle is not yet joinable.</p>',
-      actions:[{label:'Withdraw',primary:1}]});
+      '<p class="muted">'+UI.esc(monsText(ev.enc.mons))+'</p>',
+      actions:[
+        {label:'Stand and fight!',primary:1,on:function(){
+          Combat.start({mons:ev.enc.mons,title:'Set battle',text:ev.enc.text,
+            monsterSurprise:!!ev.enc.ambush,partySurprise:!!ev.enc.surprise,
+            loot:{items:ev.items||[],gold:ev.gold},
+            onWin:function(){
+              G.flags[key]='done';
+              if(ev.enc.quest)Journal.note('Deed accomplished: '+ev.enc.quest+'.','deed');
+              autosave();
+            }});
+        }},
+        {label:'Withdraw',on:function(){delete X.prompted[key];stepBack();}}]});
     return;
   }
   if(ev.chest){
-    UI.modal({title:'A treasure',body:'<p>'+UI.esc(ev.chest.text)+'</p>'+
-      (ev.chest.guard?'<p class="bad">Something guards it.</p>':''),
-      actions:[
-        {label:'Open it',primary:1,disabled:!!ev.chest.guard,on:function(){
-          if(ev.chest.trap)chestTrap(ev.chest.trap);
-          openChest(ev.chest,key);
-        }},
-        {label:'Leave'}]});
+    chestModal(ev,key);
     return;
   }
   // plain text / deed / items
@@ -250,6 +251,43 @@ function eventModal(ch,ev,key){
       autosave();paintMinimap();UI.hud();
     }}]});
 }
+function chestModal(ev,key){
+  if(ev.chest.guard){
+    var g=ev.chest.guard,guards=Array.isArray(g[0])?g:[g];
+    UI.modal({title:'A treasure',body:'<p>'+UI.esc(ev.chest.text)+'</p>'+
+      '<p class="bad">Something guards it: '+UI.esc(monsText(guards))+'.</p>',
+      actions:[
+        {label:'Fight the guard',primary:1,on:function(){
+          Combat.start({mons:guards,title:'Chest guard',text:'The guardian moves on the treasure.',
+            loot:{items:ev.chest.items||[],gold:ev.chest.gold?undefined:undefined},
+            onWin:function(){G.flags[key]='done';
+              var gold=Rules.dice(ev.chest.gold||'0')|0;
+              if(gold){G.gold+=gold;UI.log('gold','The hoard divides at '+gold+' gp.');}
+              (ev.chest.items||[]).forEach(function(id){giveToCarrier(id);UI.log('gold','Recovered: '+UI.esc(itemName(id))+'.');});
+              if(ev.chest.trap){/* trap still waits under the lid */}
+              autosave();paintMinimap();UI.hud();}});
+        }},
+        {label:'Leave it'}]});
+    return;
+  }
+  UI.modal({title:'A treasure',body:'<p>'+UI.esc(ev.chest.text)+'</p>',
+    actions:[
+      {label:'Open it',primary:1,on:function(){
+        if(ev.chest.trap)chestTrap(ev.chest.trap);
+        openChest(ev.chest,key);
+      }},
+      {label:'Leave'}]});
+}
+function openChestNoModal(ch){
+  var gold=Rules.dice(ch.gold||'0')|0;
+  if(gold){G.gold+=gold;
+    var xp=Math.max(1,Math.floor(gold/Math.max(1,UI.party().filter(function(c){return !c.dead;}).length)));
+    UI.log('gold','You divide '+gold+' gp among the purse.');awardXP(xp);}
+  (ch.items||[]).forEach(function(id){giveToCarrier(id);UI.log('gold','Found: '+UI.esc(itemName(id))+'.');});
+  if(ch.items&&ch.items.length)Journal.note('Recovered '+ch.items.map(itemName).join(', ')+'.','loot');
+  autosave();paintMinimap();UI.hud();
+}
+function stepBack(){/* withdrawal leaves you where you stood; the tile waits */}
 function openChest(ch,key){
   G.flags[key]='done';
   var gold=Rules.dice(ch.gold||'0')|0;
@@ -436,6 +474,7 @@ function stepTo(nx,ny){
     X.busy=false;
     paintMinimap();UI.hud();
     arrivalSeq();
+    if(!UI.top())Watch.step();   // bands advance only when the way is clear of modals
     drainPending();
   });
 }
@@ -517,9 +556,7 @@ function gateModal(){
     }},{label:'Stay'}]});
 }
 function serviceModal(loc){
-  UI.modal({title:loc.name,body:'<p>'+svcBlurb(loc)+'</p>'+
-    '<p class="muted">Trading, inns, temples, halls and training arrive with the town-services milestone.</p>',
-    actions:[{label:'Come away',primary:1}]});
+  Campaign.openService(loc);
 }
 function svcBlurb(loc){
   switch(loc.svc){
@@ -540,10 +577,36 @@ function renderView(scale){
   X.cam.x=X.cam.x;X.cam.y=X.cam.y;X.cam.dir=G.dir;
   View3D.render(X.prep,X.cam,scale);
 }
+/* wipe: total field defeat — wake at daybreak, light of purse, bands gone */
+function wipe(){
+  var day=Math.floor(G.time/1440);
+  G.time=(day+1)*1440+7*60;
+  G.march=0;
+  G.gold=Math.floor(G.gold*0.9);
+  G.bands=(G.bands||[]).filter(function(b){return b.map!==G.map;});
+  var anyAlive=false;
+  UI.party().concat([]).forEach(function(){});
+  G.party.forEach(function(id){
+    var c=UI.rosterById(id);if(!c)return;
+    if(!c.dead&&c.hp<=0){c.hp=1;c.fx={};anyAlive=true;}
+    else if(c.hp>0)anyAlive=true;
+  });
+  UI.log('bad','Darkness, then a long dawn: the company wakes where the foes left them, robbed of a tenth of its gold.');
+  Journal.note('Overrun and left for dead; woke at daybreak.','defeat');
+  autosave();
+  if(!anyAlive){gameOver();return;}
+  UI.modal({title:'Overrun',body:'<p>You wake at daybreak, bruised and lighter of purse. The survivors pull each other upright.</p>',
+    actions:[{label:'Limp on',primary:1}]});
+  UI.hud();UI.renderParty();
+}
+function gameOver(){
+  UI.modal({title:'The company is lost',closable:false,body:'<p>No breath remains in the roster. bards will sing differently now.</p>',
+    actions:[{label:'Return to the title',primary:1,on:function(){quitToTitle();}}]});
+}
 function paintMinimap(){
   var mc=document.getElementById('minimap');if(!mc||!X)return;
   // marks: traps found (cross), loot (pink)
-  View3D.minimap(X.prep,G.seen[G.map],G.x,G.y,G.dir,{canvas:mc});
+  View3D.minimap(X.prep,G.seen[G.map],G.x,G.y,G.dir,{canvas:mc,bands:bandPips()});
   var ctx=mc.getContext('2d');
   var s=Math.min(mc.width/X.prep.w,mc.height/X.prep.h);
   var ox=(mc.width-X.prep.w*s)/2,oy=(mc.height-X.prep.h*s)/2;
@@ -571,7 +634,7 @@ function openFullMap(){
   var cv=document.createElement('canvas');cv.width=800;cv.height=600;
   cv.style.cssText='width:100%;background:#0d0e13';
   body.appendChild(cv);
-  View3D.minimap(X.prep,G.seen[G.map],G.x,G.y,G.dir,{canvas:cv});
+  View3D.minimap(X.prep,G.seen[G.map],G.x,G.y,G.dir,{canvas:cv,bands:bandPips()});
   UI.modal({title:'Survey — '+((X.def&&X.def.name)||''),body:body,actions:[{label:'Close',primary:1}]});
 }
 function aheadText(){
@@ -701,6 +764,7 @@ document.addEventListener('DOMContentLoaded',function(){
   View3D.init(document.getElementById('view3d'));
   Over.init(document.getElementById('overCanvas'));
   UI.initPartyPref();
+  Combat.init(document.getElementById('combatCanvas'));
   document.getElementById('view3d').addEventListener('click',stageClick);
   document.getElementById('overCanvas').addEventListener('click',function(e){if(X&&X.mode==='wild')Over.stepTowardsClient(e.clientX,e.clientY);});
   document.getElementById('minimap').addEventListener('click',function(){if(X)openFullMap();});
@@ -720,6 +784,8 @@ return{
   hud:function(){UI.hud();if(UI.top()===null&&document.getElementById('party').classList.contains('open'))UI.renderParty();},
   openFullMap:openFullMap,aheadText:aheadText,cellAt:cellAt,
   equip:equip,drop:drop,quitToTitle:quitToTitle,
-  doSearch:doSearch,doCamp:doCamp,reveal:reveal,opaque:opaque
+  doSearch:doSearch,doCamp:doCamp,reveal:reveal,opaque:opaque,
+  giveToCarrier:giveToCarrier,wipe:wipe,mapId:function(){return G&&G.map;},
+  paintMinimap:paintMinimap,paintBandPips:function(){paintMinimap();},awardXP:awardXP
 };
 })();

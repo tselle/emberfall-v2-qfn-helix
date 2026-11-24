@@ -42,6 +42,7 @@ function wildMove(dx,dy){
   // site?
   if(/^[A-Z]$/.test(c)&&c!=='T'&&m.sites&&m.sites[c]){siteVisit(c,true);return;}
   rollEncounter(terr,mins,c);
+  if(!window.UI||!UI.top())Watch.step();
 }
 function rollEncounter(terr,mins,c){
   var m=map();
@@ -56,11 +57,9 @@ function rollEncounter(terr,mins,c){
   if(!list.length)return;
   var pickE=Rules.play.pick(list);
   var mons=pickE.mons.map(function(pr){
-    var n=typeof pr[1]==='number'?pr[1]:Rules.dice(String(pr[1]).indexOf('d')>=0?String(pr[1]):String(pr[1]));
+    var n=typeof pr[1]==='number'?pr[1]:Rules.dice(String(pr[1]));
     return [pr[0],n];});
-  UI.log('bad','On the '+'.'+' ground: '+mons.map(function(pr){return pr[1]+'× '+(MONSTERS[pr[0]]?MONSTERS[pr[0]].n:pr[0]);}).join(', '));
-  Bestiary.sight(mons[0][0]);
-  UI.toast('Encounter — the tactical board arrives with the combat milestone.');
+  Watch.spawn(mons,{dist:[3,7]});
 }
 /* ---- Sites ---- */
 function questDone(qid){
@@ -89,10 +88,20 @@ function siteVisit(ch,arrived){
     return;
   }
   if(s.fight&&!G.flags[key]){
+    var mons=s.fight.mons.map(function(pr){return [pr[0],typeof pr[1]==='string'?Rules.dice(pr[1]):pr[1]];});
     UI.modal({title:s.name+' — a lair',closable:false,body:'<p>'+UI.esc(s.fight.text||'')+'</p>'+
-      '<p class="muted">'+monsText(s.fight.mons)+'</p>'+
-      '<p class="muted">The tactical board arrives with the combat milestone.</p>',
-      actions:[{label:'Circle warily back',primary:1}]});
+      '<p class="muted">'+monsText(mons)+'</p>',
+      actions:[
+        {label:'Storm the lair!',primary:1,on:function(){
+          Combat.start({mons:mons,title:s.name,text:s.fight.text,partySurprise:!!s.fight.surprise,
+            onWin:function(){
+              G.flags[key]='done';
+              if(s.fight.quest)Journal.note('Deed accomplished: '+s.fight.quest+'.','deed');
+              else Journal.note('Cleared '+s.name+'.','deed');
+              Game.autosave();
+            }});
+        }},
+        {label:'Circle warily back'}]});
     return;
   }
   if(s.heal){
@@ -122,12 +131,13 @@ function siteVisit(ch,arrived){
   }}]});
 }
 function camp(){
-  UI.modal({title:'Camp in the wilds',body:'<p>'+((map().sites&&map().sites[cellAt(G.x,G.y)]&&map().sites[cellAt(G.x,G.y)].holy)?'Holy ground holds the dark off tonight.':'The watch is set; the region prowls.')+'</p>',
+  UI.modal({title:'Camp in the wilds',body:'<p>'+((map().sites&&map().sites[cellAt(G.x,G.y)]&&map().sites[cellAt(G.x,G.y)].holy)?'Holy ground holds the dark off tonight.':'The watch is set; the region prowls.')+(Watch.visible().length?'<br><b class=bad>Footfalls already ring the camp.</b>':'')+'</p>',
     actions:[{label:'Camp eight hours',primary:1,on:function(){
       var risk=1;
       var s=map().sites&&map().sites[cellAt(G.x,G.y)];
       if(s&&(s.holy||s.home||s.hamlet))risk=0;
-      if(risk&&Rules.play.chance(.25)){G.time+=120;UI.log('bad','Sounds through the dark break the camp before dawn. (No rest gained; interruption fights arrive with combat.)');UI.hud();return;}
+      var p=risk?(Watch.visible().length?.6:.25):0;
+      if(risk&&Rules.play.chance(p)){G.time+=120;UI.log('bad','Sounds through the dark break the camp before dawn. (No rest gained; interruption fights arrive with combat.)');UI.hud();return;}
       G.time+=480;G.march=0;O.warnedMarch=false;
       UI.party().forEach(function(c){if(c.dead)return;if(c.hp>0)c.hp=Math.min(c.maxhp,c.hp+1);
         if(c.prep&&c.mem)Object.keys(c.prep).forEach(function(sp){c.mem[sp]=c.prep[sp];});c.layUsed=false;c.fx={};});
@@ -172,6 +182,13 @@ function render(){
       ctx.fillText(m.sites[c].name,ox+x*s+2,oy+y*s-3);
     }
   }
+  // bands visible to the march
+  Watch.visible().forEach(function(b){
+    ctx.fillStyle='#c0392b';
+    ctx.beginPath();ctx.arc(ox+(b.x+.5)*s,oy+(b.y+.5)*s,Math.max(3,s*.3),0,6.29);ctx.fill();
+    ctx.fillStyle='#e9e2cf';ctx.font=Math.max(9,s*.45)+'px Georgia';
+    ctx.fillText(String(b.n),ox+(b.x+1)*s+1,oy+(b.y+1)*s-1);
+  });
   // party token
   ctx.fillStyle='#e3b54a';
   ctx.beginPath();ctx.arc(ox+(G.x+.5)*s,oy+(G.y+.5)*s,Math.max(4,s*.35),0,6.29);ctx.fill();

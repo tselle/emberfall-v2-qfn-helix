@@ -41,6 +41,7 @@ function close(entry){
   if(!stack.length)$('modals').classList.remove('on');
 }
 function closeAll(){stack.slice().forEach(close);}
+function closeTop(){if(stack.length)close(stack[stack.length-1]);}
 function top(){return stack[stack.length-1]||null;}
 document.addEventListener('keydown',function(e){
   var t=top();if(!t)return;
@@ -283,6 +284,6 @@ function help(){
    '<p><b>Campaign:</b> from a safe town, the menu\u2019s Campaign sends the company on to another adventure; the world keeps its gates, chests and deeds.</p>'});
 }
 return{el:el,esc:esc,$:$,modal:modal,close:close,closeAll:closeAll,top:top,toast:toast,log:log,
-  hud:hud,party:party,rosterById:rosterById,colorOf:colorOf,renderParty:renderParty,toggleParty:toggleParty,initPartyPref:initPartyPref,
+  hud:hud,party:party,rosterById:rosterById,colorOf:colorOf,renderParty:renderParty,toggleParty:toggleParty,initPartyPref:initPartyPref,closeTop:closeTop,
   sheet:sheet,createHero:createHero,saveDialog:saveDialog,loadDialog:loadDialog,menu:menu,help:help};
 })();

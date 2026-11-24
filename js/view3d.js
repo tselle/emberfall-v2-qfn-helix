@@ -134,6 +134,19 @@ function minimap(prep,seen,camX,camY,dir,opts){
     else if(/^[A-Z]$/.test(c))col='#c8a03c';
     mm.fillStyle=col;mm.fillRect(ox+x*s,oy+y*s,Math.ceil(s),Math.ceil(s));
   }
+  // visible bands
+  if(opts.bands)opts.bands.forEach(function(b){
+    if(b.x<0||b.y<0||b.x>=prep.w||b.y>=prep.h)return;
+    mm.fillStyle='#c0392b';
+    mm.beginPath();
+    mm.moveTo(ox+b.x*s+s/2,oy+b.y*s+1);
+    mm.lineTo(ox+(b.x+1)*s-1,oy+b.y*s+s/2);
+    mm.lineTo(ox+b.x*s+s/2,oy+(b.y+1)*s-1);
+    mm.lineTo(ox+b.x*s+1,oy+b.y*s+s/2);
+    mm.closePath();mm.fill();
+    mm.fillStyle='#e9e2cf';mm.font=Math.max(8,s*.8)+'px Georgia';
+    mm.fillText(String(b.n),ox+b.x*s+s+2,oy+b.y*s+s-1);
+  });
   // party arrow
   if(camX>=0){
     mm.fillStyle='#e3b54a';
