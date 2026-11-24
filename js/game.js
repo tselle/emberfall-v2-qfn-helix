@@ -894,6 +894,7 @@ document.addEventListener('DOMContentLoaded',function(){
   document.getElementById('view3d').addEventListener('click',stageClick);
   document.getElementById('overCanvas').addEventListener('click',function(e){if(X&&X.mode==='wild')Over.stepTowardsClient(e.clientX,e.clientY);});
   document.getElementById('minimap').addEventListener('click',function(){if(X)openFullMap();});
+  Navpad.auto();   /* touch pads appear on coarse pointers, per saved mode */
   title();
 });
 
