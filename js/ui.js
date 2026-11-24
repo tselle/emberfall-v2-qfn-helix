@@ -169,8 +169,11 @@ function sheet(c){
   var eqRows=['melee','missile','armor','shield','ring1','ring2','cloak','boots','gloves','belt','neck','charm'].map(function(sl){
     var it=item(c.eq[sl]);return it?esc(sl)+': '+esc(it.n):'';}).filter(Boolean).join('<br>')||'<span class=muted>—</span>';
   rows.push(['Equipped',eqRows]);
-  var inv=(c.inv||[]).map(function(id){var it=item(id);return it?'<div class=item><span>'+esc(it.n)+'</span><span class="acts">'+
+  var inv=(c.inv||[]).map(function(id){var it=item(id);return it?'<div class=item><span>'+esc(it.n)+
+    (it.chargesLeft!=null?' <span class=muted>'+it.chargesLeft+' chr</span>':'')+
+    '</span><span class="acts">'+
     (it.t==='w'||it.t==='a'||it.t==='s'||it.t==='r'||it.t==='g'?'<button data-eq="'+c.id+'|'+id+'">Wear</button>':'')+
+    (it.t==='p'||it.t==='x'||it.t==='d'?'<button data-use="'+c.id+'|'+id+'">Use</button>':'')+
     '<button data-drop="'+c.id+'|'+id+'">Drop</button></span></div>':'';}).join('')||'<span class=muted>Empty pack</span>';
   var wrap=el('div');
   wrap.innerHTML='<table>'+rows.map(function(r){return '<tr><th>'+r[0]+'</th><td>'+r[1]+'</td></tr>';}).join('')+'</table>'+
@@ -178,8 +181,9 @@ function sheet(c){
   var entry=modal({title:c.name+' — Sheet',body:wrap,actions:[{label:'Close',primary:1}]});
   wrap.addEventListener('click',function(e){
     var b=e.target.closest('button');if(!b)return;
-    if(b.dataset.eq){var p=b.dataset.eq.split('|');Game.equip(c,p[1]);close(entry);sheet(c);}
-    if(b.dataset.drop){var q=b.dataset.drop.split('|');Game.drop(c,q[1]);close(entry);sheet(c);}
+    if(b.dataset.eq){var p=b.dataset.eq.split('|');Game.equip(UI.rosterById(p[0]),p[1]);close(entry);sheet(UI.rosterById(p[0]));}
+    if(b.dataset.use){var p2=b.dataset.use.split('|');Game.usePackItem(UI.rosterById(p2[0]),p2[1]);close(entry);sheet(UI.rosterById(p2[0]));}
+    if(b.dataset.drop){var q=b.dataset.drop.split('|');Game.drop(UI.rosterById(q[0]),q[1]);close(entry);sheet(UI.rosterById(q[0]));}
   });
 }
 function createHero(){

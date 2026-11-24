@@ -270,6 +270,10 @@ function chestModal(ev,key){
         {label:'Leave it'}]});
     return;
   }
+  if(ev.chest.lock){
+    chestLockModal(ev,key);
+    return;
+  }
   UI.modal({title:'A treasure',body:'<p>'+UI.esc(ev.chest.text)+'</p>',
     actions:[
       {label:'Open it',primary:1,on:function(){
@@ -277,6 +281,37 @@ function chestModal(ev,key){
         openChest(ev.chest,key);
       }},
       {label:'Leave'}]});
+}
+function chestLockModal(ev,key){
+  var lockItem=ev.chest.lock,pickKey='pick:'+key;
+  var hasKey=UI.party().some(function(c){return !c.dead&&(c.inv.indexOf(lockItem)>=0||Object.keys(c.eq||{}).some(function(s){return c.eq[s]===lockItem;}));});
+  UI.modal({title:'A locked treasure',body:'<p>'+UI.esc(ev.chest.text)+'</p><p>'+(ev.chest.lockText||'It is locked fast.')+'</p>',
+    actions:[
+    {label:'Use the key',disabled:!hasKey,on:function(){openChest(ev.chest,key);}},
+    {label:'Pick the lock',disabled:!!G.flags[pickKey+':done'],on:function(){
+      G.flags[pickKey+':done']=1;G.time+=10;
+      var best=null;UI.party().forEach(function(c){if(c.dead)return;var sk=Rules.thiefSkills(c);if(sk&&(!best||sk.pick>best.pick))best={c:c,s:sk};});
+      if(!best){UI.log('dim','None of your company knows locks.');UI.hud();return;}
+      if(Rules.play.d100()<=best.s.pick){UI.log('good',UI.esc(best.c.name)+' picks the casket lock.');openChest(ev.chest,key);}
+      else UI.log('bad',UI.esc(best.c.name)+' fails — the lock keeps its secret.');
+      UI.hud();
+    }},
+    {label:'Force it',on:function(){
+      G.time+=10;
+      var strongest=UI.party().filter(function(c){return !c.dead;}).sort(function(a,b){return Rules.abilityScore(b,'str')-Rules.abilityScore(a,'str');})[0];
+      if(!strongest){UI.hud();return;}
+      var sa=Rules.strOf(strongest);
+      if(Rules.play.d20()<=Math.min(20,sa.openDoors+(Rules.abilityScore(strongest,'str')>=18?4:2))){
+        UI.log('good',UI.esc(strongest.name)+' forces the silverwork with a crash.');
+        if(X.def.wander&&Rules.play.chance(.25))arrivalSeq();
+        openChest(ev.chest,key);
+      }else{
+        UI.log('bad','The hasp bends but holds.');
+        if(X.def.wander&&Rules.play.chance(.25)){UI.log('bad','The crashing draws something.');arrivalSeq();}
+      }
+      UI.hud();
+    }},
+    {label:'Leave'}]});
 }
 function openChestNoModal(ch){
   var gold=Rules.dice(ch.gold||'0')|0;
@@ -675,6 +710,65 @@ function buildCmdBar(){
 }
 
 /* ============ Equip / drop ============ */
+/* ---- pack consumption: potions, scrolls, charged devices ---- */
+function consumePack(c,id){
+  var i=c.inv.indexOf(id);
+  if(i<0&&String(id).indexOf('#')<0){
+    for(var j=0;j<c.inv.length;j++){if(c.inv[j]===id){i=j;break;}}
+  }
+  if(i<0)return false;
+  var it=item(c.inv[i]);
+  if(it&&it.t==='d'&&it.chargesLeft!=null&&it.chargesLeft>1){
+    c.inv[i]=String(it.id).split('#')[0]+'#'+(it.chargesLeft-1);
+    UI.log('dim',UI.esc(it.n)+' dwindles — '+(it.chargesLeft-1)+' charges.');
+  }else c.inv.splice(i,1);
+  return true;
+}
+var READABLE_HERE={clw:1,csw:1,ccw:1,heal:1,neutpoison:1,slowpoison:1,freeaction:1,raisedead:1,resurrect:1};
+function usePackItem(c,id){
+  var it=item(id);if(!it)return false;
+  if(it.t==='p'){
+    if(!it.cure){UI.toast('That draught serves another purpose.');return false;}
+    if(c.hp>=c.maxhp){UI.toast(c.name+' needs no draught.');return false;}
+    var amt=Rules.dice(it.cure);c.hp=Math.min(c.maxhp,c.hp+amt);
+    consumePack(c,id);
+    UI.log('good',UI.esc(c.name)+' drinks deep (+'+amt+' hp).');
+    autosave();UI.hud();UI.renderParty();return true;
+  }
+  if(it.t==='x')return readScrollOut(c,id,it);
+  if(it.t==='d'){UI.toast('Its purpose waits for battle.');return false;}
+  UI.toast('That is equipment, not a convenience.');return false;
+}
+function scrollSphereOK(c,sp){
+  var def=SPELLS[sp];if(!def)return false;
+  if(def.c==='M')return c.cls==='M';
+  return c.cls==='C'||c.cls==='P'||(c.cls==='R'&&def.l<=4);
+}
+function readScrollOut(c,id,it){
+  var sp=it.spell;
+  if(!scrollSphereOK(c,sp)){UI.toast('The script squirms, unreadable to '+Rules.CLASSES[c.cls].name+'.');return false;}
+  if(!READABLE_HERE[sp]){UI.toast('The parchment holds no purchase on the quiet.');return false;}
+  var dead=sp==='raisedead'||sp==='resurrect';
+  if(dead){
+    var cand=UI.party().filter(function(p){return p.dead&&!p.lost;});
+    if(!cand.length){UI.toast('No one lies beyond these words.');return false;}
+    var t=cand[0];
+    consumePack(c,id);
+    var roll=Rules.play.d20(),need=Rules.abilityScore(t,'con');
+    if(sp==='resurrect'||roll<=need){t.dead=false;t.hp=1;if(sp==='raisedead')t.scores.con=Math.max(3,t.scores.con-1);
+      UI.log('good',UI.esc(t.name)+' returns from the read word.');Journal.note(t.name+' was raised by a scroll.','raise');}
+    else{t.lost=true;UI.log('bad','The rite falters; '+UI.esc(t.name)+'’s spirit drifts beyond recall.');}
+    autosave();UI.renderParty();return true;
+  }
+  var hurt=UI.party().filter(function(p){return !p.dead&&p.hp<p.maxhp&&p.hp>0;}).sort(function(a,b){return a.hp/a.maxhp-b.hp/b.maxhp;});
+  if(!hurt.length){UI.toast('No wound waits on this reading.');return false;}
+  var t2=hurt[0],dice=sp==='clw'?'1d8':sp==='csw'?'2d8+1':sp==='ccw'?'3d8+3':'999';
+  consumePack(c,id);
+  if(sp==='neutpoison'||sp==='slowpoison'){t2.poison=null;UI.log('good',UI.esc(t2.name)+' is cleansed.');}
+  else if(sp==='freeaction'){UI.log('good','A reading eases '+UI.esc(t2.name)+'.');}
+  else{var d=Rules.dice(dice);t2.hp=Math.min(t2.maxhp,t2.hp+d);UI.log('good',UI.esc(t2.name)+' is healed by the read word (+'+d+').');}
+  autosave();UI.hud();UI.renderParty();return true;
+}
 function equip(c,id){
   var it=item(id);if(!it)return;
   if(c.inv.indexOf(id)<0)return;
@@ -786,6 +880,7 @@ return{
   equip:equip,drop:drop,quitToTitle:quitToTitle,
   doSearch:doSearch,doCamp:doCamp,reveal:reveal,opaque:opaque,
   giveToCarrier:giveToCarrier,wipe:wipe,mapId:function(){return G&&G.map;},
-  paintMinimap:paintMinimap,paintBandPips:function(){paintMinimap();},awardXP:awardXP
+  paintMinimap:paintMinimap,paintBandPips:function(){paintMinimap();},awardXP:awardXP,
+  consumePack:consumePack,usePackItem:usePackItem,scrollSphereOK:scrollSphereOK
 };
 })();

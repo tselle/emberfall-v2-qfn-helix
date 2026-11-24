@@ -26,10 +26,10 @@ function start(spec){
     n=Math.min(n,14-mons.length);
     for(var i=0;i<n;i++){
       var hp=Rules.dice(def.hp)||1;
-      mons.push({side:'m',def:def,name:def.n,hp:hp,maphp:hp,ac:def.ac,mv:def.mv||9,ml:def.ml,
+      mons.push({side:'m',mid:id,def:def,name:def.n,hp:hp,maphp:hp,ac:def.ac,mv:def.mv||9,ml:def.ml,
         x:11+Rules.play.d(1,3)-1,y:1+Rules.play.d(1,8),acted:false,seen:false});
     }
-    Bestiary.sight(id);
+    Bestiary.sight(id);Bestiary.fought(id);
   });
   // spread monsters into free cells
   mons.forEach(function(m,i){while(occupiedBy(mons,m.x,m.y,m))m.y=(m.y+1)%H;});
@@ -42,7 +42,7 @@ function start(spec){
   pcs.forEach(function(p){while(occupiedBy(pcs,p.x,p.y,p))p.y++;});
   CB={spec:spec,mons:mons,pcs:pcs,obstacles:obstacles,round:0,phase:'idle',
     order:[],turn:null,tool:null,moveSet:{},log:[],xp:0,kills:0,escaped:0,
-    surprise:spec.partySurprise||spec.monsterSurprise||0,done:false};
+    surprise:spec.partySurprise||spec.monsterSurprise||0,done:false,token:0};
   cv.classList.remove('hidden');
   el('view3d').classList.add('hidden');el('overCanvas').classList.add('hidden');
   el('battleStatus').classList.remove('hidden');
@@ -149,8 +149,9 @@ function nextTurn(){
   CB.turn=un;un.acted=true;
   CB.moveSet=moveSet(un);
   CB.tool=null;
+  var tk=++CB.token;
   draw();
-  if(un.side==='m')setTimeout(function(){if(CB&&!CB.done&&CB.turn===un)monAct(un);},300);
+  if(un.side==='m')setTimeout(function(){if(CB&&!CB.done&&CB.turn===un&&CB.token===tk)monAct(un);},300);
   else{
     status('Round '+CB.round+' · '+un.c.name+"'s act");
     buildCommands(un);
@@ -182,7 +183,8 @@ function endRound(){
   CB.mons.forEach(function(m){m.acted=false;});
   CB.order=initOrder();CB.idx=-1;
   draw();
-  setTimeout(function(){nextTurn();},120);
+  var tk=++CB.token;
+  setTimeout(function(){if(CB&&!CB.done&&CB.token===tk)nextTurn();},120);
 }
 function winCheck(){
   if(!CB||CB.done)return true;
@@ -194,6 +196,7 @@ function winCheck(){
 }
 function killMon(m){
   m.hp=0;m.gone=true;m.escaped=false;CB.kills++;
+  if(m.mid)Bestiary.slain(m.mid);
   logEvent(m.name+' falls.');
   winCheck();
 }
@@ -420,9 +423,10 @@ function spellMenu(u,casts){
   UI.modal({title:c.name+' — spell slots',body:body,actions:[{label:'Put it away'}]});
 }
 function castAt(u,tx,ty,target){
-  var c=u.c,sp=CB.tool.sp,info=CB.tool.info;
+  var c=u.c,tool=CB.tool,sp=tool.sp,info=tool.info;
   var rngT=Math.max(1,Math.round(((SPELLS[sp].rng||30)||30)/10));
   if(SPELLS[sp].rng>0&&Math.max(Math.abs(u.x-tx),Math.abs(u.y-ty))>rngT+2){UI.toast('Beyond the reach of the gesture.');return;}
+  if(tool.scrollId){Game.consumePack(c,tool.scrollId);logEvent('The magic unravels from its paper or wand.');}
   CB.tool=null;
   logEvent(c.name+' weaves '+SPELLS[sp].n+'.');
   info.f(c,{x:tx,y:ty,unit:target},CB);
@@ -444,15 +448,34 @@ function turnUndead(u){
 }
 function itemMenu(u){
   var c=u.c;
-  var uses=(c.inv||[]).map(function(id){var it=item(id);return it&&it.t==='p'?{id:id,it:it}:null;}).filter(Boolean);
+  var uses=(c.inv||[]).map(function(id){var it=item(id);return it&&(it.t==='p'||it.t==='x'||it.t==='d')?{id:id,it:it}:null;}).filter(Boolean);
+  uses=uses.filter(function(x){
+    if(x.it.t==='p')return true;
+    var sp=x.it.spell,info=SPELLC[sp];
+    if(!info)return false;
+    var sphere=SPELLS[sp].c==='M'?c.cls==='M':(c.cls==='C'||c.cls==='P'||(c.cls==='R'&&SPELLS[sp].l<=4));
+    if(!sphere)return false;
+    return info.t==='mon'||info.t==='cell'||info.t==='self';
+  });
   if(!uses.length){UI.toast('Nothing in the pack for the press of battle.');return;}
   var body=UI.el('div');
   uses.forEach(function(x){
     var row=UI.el('div','item');
     row.innerHTML='<span>'+UI.esc(x.it.n)+' <span class=muted>'+UI.esc(x.it.cure?'heals '+x.it.cure:'')+
-      (x.it.poison?' — poison':x.it.oil?' — oil and flame':'')+'</span></span>';
+      (x.it.poison?' — poison':x.it.oil?' — oil and flame':'')+
+      (x.it.t==='x'?' — read once: '+((SPELLS[x.it.spell]||{}).n||'')+' ('+SPELLC[x.it.spell].tip+')':'')+
+      (x.it.t==='d'?' — device, '+x.it.chargesLeft+' charges: '+((SPELLS[x.it.spell]||{}).n||''):'')+
+      '</span></span>';
     var acts=UI.el('span','acts');var b=UI.el('button',null,'Use');
     b.onclick=function(){
+      if(x.it.t==='x'||x.it.t==='d'){
+        var info=SPELLC[x.it.spell];
+        UI.closeTop();
+        if(info.t==='self'){Game.consumePack(c,x.id);info.f(c,null,CB);endAct();return;}
+        CB.tool={kind:'spell',sp:x.it.spell,info:info,scrollId:x.id};
+        UI.toast('Aim the '+(info.t==='cell'?'place':'foe')+' — the parchment burns on release.');
+        draw();return;
+      }
       c.inv.splice(c.inv.indexOf(x.id),1);
       if(x.it.cure){var amt=Rules.dice(x.it.cure);c.hp=Math.min(c.maxhp,c.hp+amt);logEvent(c.name+' drinks deep (+'+amt+' hp).');}
       else if(x.it.poison){u.poisoned=1;logEvent(c.name+' coats a blade with venom.');}
@@ -644,6 +667,7 @@ var SPELLC={
    .forEach(function(m){if(!m.def.undead&&pool>=m.def.hd){pool-=m.def.hd;m.hp=0;m.gone=true;CB.kills++;logEvent(m.name+' drops dead.');}});}},
  holdperson:{t:'mon',tip:'save or held',f:function(c,tg){if(tg.unit.def.size==='L'||tg.unit.def.hd>8){logEvent('The word cannot hold so great a body.');return;}
    if(!msave(tg.unit,'spell')){tg.unit.held=Math.max(1,c.lvl);logEvent(tg.unit.name+' stands frozen mid-step.');}}},
+ hold_p:0,
  holdmon:0,
  charm:{t:'mon',tip:'fight for you a while',f:function(c,tg){if(!msave(tg.unit,'spell')){tg.unit.held=2;logEvent(tg.unit.name+' looks at you with sudden friendship.');}}},
  // ---- priest ----
@@ -676,7 +700,7 @@ var SPELLC={
  resfc:{t:'ally',tip:'ward stone-flesh',f:function(c,tg){tg.unit.fx.resf=1;}},
  magvest:0,cablind2:0
 };
-SPELLC.holdmon=SPELLC.holdperson;SPELLC.caw=SPELLC.clw;SPELLC.caw2=SPELLC.caw;SPELLC.cablind2=SPELLC.cablind;
+SPELLC.holdmon=SPELLC.holdperson;SPELLC.hold_p=SPELLC.holdperson;SPELLC.caw=SPELLC.clw;SPELLC.caw2=SPELLC.caw;SPELLC.cablind2=SPELLC.cablind;
 function pcOf(c){return CB.pcs.find(function(p){return p.c===c;});}
 
 /* ================= Flee button etc done; drawing ================= */
@@ -837,7 +861,10 @@ function init(canvas){cv=canvas;cv.addEventListener('click',onClick);}
 /* autopilot: sane default act for the current pc (used by headless tests, handy for demos) */
 function autoAct(){
   if(!CB||!CB.turn||CB.turn.side!=='p')return;
+  var tk=CB.token;
   var u=CB.turn;var m=null,bd=999;
+  // ensure exactly one driver when the whole board falls in one act
+  if(!CB.mons.some(function(mm){return mm.hp>0&&!mm.gone;})){if(!CB.done)finish('win');return;}
   CB.mons.forEach(function(mm){if(standing(mm)){var d=dist8(u,mm);if(d<bd){bd=d;m=mm;}}});
   if(!m){endAct();return;}
   var casts=casterSpells(u.c);
@@ -855,7 +882,7 @@ function autoAct(){
   }
   if(dist8(u,m)<=1)pcAttack(u,m,{});
   else if(u.c.hp<=0){} // downed: nothing
-  endAct();
+  if(CB&&CB.token===tk)endAct();
 }
 return{start:start,isActive:isActive,onKey:onKey,init:init,autoAct:autoAct,
   _turn:function(){return CB&&CB.turn;},_cb:function(){return CB;}};

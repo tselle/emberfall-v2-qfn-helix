@@ -147,6 +147,11 @@ I('mirror',{n:'Steel Mirror',t:'g',price:10,w:2});
 /* Consumables & valuables */
 I('oilflat',{n:'Potion of Healing (common)',t:'p',cure:'1d6+1',price:50});
 I('potioncure',{n:'Potion of Cure Light Wounds',t:'p',cure:'1d8',price:75});
+I('potioncsym',{n:'Potion of Cure Serious Wounds',t:'p',cure:'2d8+1',price:225});
+/* Devices: 'deviceId#charges' instances resolve through item(). */
+I('wandmm',{n:'Wand of Magic Missiles',t:'d',spell:'mmissile',charges:25,price:600});
+I('wandinvis',{n:'Wand of Invisibility',t:'d',spell:'invis',charges:6,price:550});
+I('wandscare',{n:'Wand of Fear',t:'d',spell:'scare',charges:25,price:500});
 I('antivenom',{n:'Antivenom',t:'p',purge:'poison',price:80});
 I('gemr',{n:'Ruby (50 gp)',t:'v',price:50});
 I('geme',{n:'Emerald (100 gp)',t:'v',price:100});
@@ -269,7 +274,7 @@ MAPS.crypt1={
       text:'A defiled ossuary.'},
     d:{enc:{mons:[['skeleton',3]],text:'Sarcophagi line this chamber; the lids are sliding.'},
       text:'Broken sarcophagi.'},
-    e:{enc:{mons:[['redfang',1],['ogre',2]],text:'A red-crowned ogre rises from a stolen throne, club like a ship\u2019s mast.',leader:1,quest:'redfang'},
+    e:{enc:{mons:[['redfang',1],['ogre',2]],text:'A red-crowned ogre rises from a stolen throne, club like a ship\u2019s mast.',leader:1,quest:'redfang'},items:['ironkey'],
       text:'Redfang\u2019s stolen hall.'},
     c:{chest:{text:'An iron-bound coffer under a fallen banner.',gold:'4d6x10',items:['potioncure','gemr'],trap:'darts'}},
     g:{chest:{text:'A hidden cache behind a cracked stone (secret door).',gold:'3d6x10',items:['silvermace','geme'],hidden:1}},
@@ -278,7 +283,7 @@ MAPS.crypt1={
       text:'A working chamber of the circle.'},
     i:{text:'A weeping statue, face worn away by tears. Cold pools at its feet.',deed:'statueClue',
       hint:'The statue weeps black tears; Malvek\u2019s circle feeds the undercroft something older than ghouls.'},
-    j:{chest:{text:'A burial chest of a forgotten abbot.',gold:'5d6x10',items:['scroll:csw']}},
+    j:{chest:{text:'A burial chest of a forgotten abbot.',gold:'5d6x10',items:['scroll:csw','wandinvis']}},
     m:{enc:{mons:[['skeleton',2],['zombie',1]],text:'The sealed niches of the south gallery are not, in fact, sealed.'},
       text:'The broken niches.'},
     n:{chest:{text:'Votive censers hidden hastily under a disused passage floor.',gold:'3d6x10',items:['geme']}},
@@ -336,7 +341,7 @@ MAPS.crypt2={
     u:{enc:{mons:[['spider',1],['cultist',1]],text:'Webs stitch the archway; a webbed cultist screams through the silk.'},text:'A silk-curtained alcove.'},
     w:{enc:{mons:[['ghoul',2]],text:'A feeding den: two ghouls look up from the communal meal entirely unashamed.',sight:5},
       text:'The feeding den.'},
-    y:{chest:{text:'A sacrist buried in a hurry, and a grave-good casket buried with him.',gold:'5d6x10',items:['gemr']}},
+    y:{chest:{text:'A sacrist buried in a hurry, and a grave-good casket buried with him.',gold:'5d6x10',items:['gemr','scroll:fireball']}},
     v:{enc:{mons:[['malvek',1],['zealot',2],['zombie',1]],text:'Malvek the Ashen turns from the ash altar, hands bright with stolen fire. This is the circle\u2019s heart.',leader:1,quest:'malvek',surprise:0},
       text:'The circle is broken.'}},
   wander:[
@@ -370,7 +375,7 @@ MAPS.tower={
     x:{enc:{mons:[['gnoll',3]],text:'Hyena-laughter echoes; the pack\u2019s watchers drop rope-ladders of knotted sheets.',sight:6},text:'The pack\u2019s watch-floor.'},
     y:{enc:{mons:[['werehyena',1],['gnoll',2]],text:'A scarred hyena-man rises on two legs \u2014 the Packlord, in his human guise until now.',leader:1,quest:'gnolls'},
       text:'The Bloodmane Packlord lies dead; the watchtower\u2019s grip on the vale is broken.'},
-    z:{chest:{text:'Chained chest with an iron lock (ogre\u2019s work).',gold:'6d6x10',items:['shortbow','potioncure'],trap:'pit'}},
+    z:{chest:{text:'Chained chest with an iron lock (ogre\u2019s work).',gold:'6d6x10',items:['shortbow','potioncure','wandmm'],trap:'pit'}},
     t:{chest:{text:'A trophy chest of the watchtower\u2019s Greywater takings.',gold:'5d6x10',items:['shortsword','gemr']}},
     u:{enc:{mons:[['gnoll',2]],text:'Two gnoll sentries on the ground floor, slack until they aren\u2019t.',sight:4},
       text:'The sentry pair.'},
