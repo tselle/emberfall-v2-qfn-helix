@@ -13,7 +13,7 @@ function allMods(tab){
   Object.keys(MODULES).forEach(function(id){
     var m=MODULES[id];
     if(!tab.band){if(tab.mods&&tab.mods.indexOf(id)>=0)out.push(id);}
-    else{ /* generated bands fill in milestone 4 */ }
+    else{if(MODULES[id].band===tab.band)out.push(id);}
   });
   return out;
 }
