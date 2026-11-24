@@ -151,7 +151,65 @@ function visit(){
   else UI.log('dim','Nothing here but '+terrName(c)+'.');
 }
 function terrName(c){return {'^':'broken rock','~':'running water','T':'woods','n':'hills','%':'fen','=':'road','+':'bridge',',':'grass','.':'grassland'}[c]||'open ground';}
-/* ---- painting: fit whole region, fog unknown, site marks, party token ---- */
+/* ---- painting: one cached painted region, fog overlay, site marks ---- */
+var regionCache={id:'',s:0,can:null};
+function terrCol(c,x,y){
+  if(c==='^')return '#4a4f5e';
+  if(c==='~')return '#2a4a66';
+  if(c==='=')return '#6a5f48';
+  if(c==='+')return '#8a7248';
+  if(c==='T')return (x*7+y*13)%3?'#22402a':'#1c3624';
+  if(c==='n')return (x*11+y*5)%3?'#4c4836':'#433f30';
+  if(c==='%')return '#2e4438';
+  return (x*3+y*5)%4?'#3a4529':'#354026';
+}
+function hashXY(id,x,y){
+  var h=(x*73856093)^(y*19349663);
+  for(var i=0;i<id.length;i++)h=Math.imul(h^id.charCodeAt(i),16777619);
+  return h>>>0;
+}
+function paintTerrainLayer(m,W,H,s,id){
+  var can=document.createElement('canvas');
+  can.width=Math.max(1,W*s);can.height=Math.max(1,H*s);
+  var g=can.getContext('2d');
+  for(var y=0;y<H;y++)for(var x=0;x<W;x++){
+    var c=m.grid[y][x],px=x*s,py=y*s;
+    var r=new Rules.RNG(hashXY(id,x,y));
+    g.fillStyle=terrCol(c,x,y);g.fillRect(px,py,s+1,s+1);
+    if(c==='T'){   // canopy blobs with lit crowns
+      for(var t=0;t<3;t++){
+        var cx=px+r.int(2,s-2),cy=py+r.int(2,s-2),rad=s*.3;
+        g.fillStyle='#16281b';g.beginPath();g.arc(cx,cy,rad,0,6.29);g.fill();
+        g.fillStyle='#2e5a36';g.beginPath();g.arc(cx-rad*.3,cy-rad*.35,rad*.55,0,6.29);g.fill();
+      }
+    }else if(c==='n'){   // hill mounds, light on the sun side
+      g.fillStyle='#57513c';g.beginPath();g.arc(px+s*.5,py+s*.75,s*.4,Math.PI,0);g.fill();
+      g.fillStyle='#6b6248';g.beginPath();g.arc(px+s*.42,py+s*.62,s*.16,Math.PI,0);g.fill();
+    }else if(c==='^'){   // peaks with snow tips
+      g.fillStyle='#5a6070';g.beginPath();
+      g.moveTo(px+1,py+s);g.lineTo(px+s*.5,py+1.5);g.lineTo(px+s-1,py+s);g.closePath();g.fill();
+      g.fillStyle='#cfd6e4';g.beginPath();
+      g.moveTo(px+s*.5,py+1.5);g.lineTo(px+s*.66,py+s*.4);g.lineTo(px+s*.34,py+s*.4);g.closePath();g.fill();
+    }else if(c==='%'){   // fen reeds and water sheen
+      g.strokeStyle='#3f5a49';g.lineWidth=1;
+      for(var q=0;q<3;q++){var qx=px+r.int(2,s-2);g.beginPath();g.moveTo(qx,py+s);g.quadraticCurveTo(qx+2,py+s*.5,qx-1,py+2);g.stroke();}
+      g.fillStyle='rgba(120,160,170,.14)';g.fillRect(px,py+s*.55,s,1.6);
+    }else if(c==='~'){   // current lines
+      g.strokeStyle='rgba(140,180,220,.4)';g.lineWidth=1.4;
+      g.beginPath();g.moveTo(px,py+s*.35+r.int(0,3));
+      g.quadraticCurveTo(px+s*.5,py+s*(.3+r.chance(.5)?.45:.15),px+s,py+s*.5);g.stroke();
+    }else if(c==='='||c==='+'){   // beaten ruts and planks
+      g.fillStyle='rgba(30,26,18,.5)';
+      for(var d=0;d<4;d++)g.fillRect(px+r.int(1,s-3),py+r.int(1,s-3),2,2);
+      if(c==='+'){g.strokeStyle='#5a4a30';g.strokeRect(px+1,py+1,s-2,s-2);}
+    }else if(c==='.'||c===','){   // grass speckle
+      g.fillStyle=r.chance(.5)?'rgba(120,140,80,.16)':'rgba(16,22,12,.25)';
+      for(var p2=0;p2<4;p2++)g.fillRect(px+r.int(0,s-2),py+r.int(0,s-2),1.6,1.6);
+    }
+  }
+  try{g.lineWidth=1;}catch(e){}
+  return can;
+}
 function render(){
   if(!cv||!O)return;
   var m=map(),g=m.grid,H=g.length,W=g[0].length;
@@ -159,21 +217,18 @@ function render(){
   var s=Math.min(cw/W,ch/H),ox=(cw-W*s)/2,oy=(ch-H*s)/2;
   ctx.fillStyle='#07080c';ctx.fillRect(0,0,cw,ch);
   var seen=G.seen[O.mapId];
+  if(regionCache.id!==O.mapId||regionCache.s!==Math.round(s)*1000+H){
+    regionCache={id:O.mapId,s:Math.round(s)*1000+H,can:paintTerrainLayer(m,W,H,s,O.mapId)};
+  }
+  ctx.drawImage(regionCache.can,ox,oy,W*s,H*s);
   for(var y=0;y<H;y++)for(var x=0;x<W;x++){
     var known=!seen||!seen[y]||seen[y][x]==='1';
     var c=g[y];c=c[x];
-    var col;
-    if(c==='^')col='#4a4f5e';
-    else if(c==='~')col='#2a4a66';
-    else if(c==='=')col='#6a5f48';
-    else if(c==='+')col='#8a7248';
-    else if(c==='T')col=(x*7+y*13)%3?'#22402a':'#1c3624';
-    else if(c==='n')col=(x*11+y*5)%3?'#4c4836':'#433f30';
-    else if(c==='%')col='#2e4438';
-    else col=(x*3+y*5)%4?'#3a4529':'#354026';
-    if(!known)col='#0d0f16';
-    ctx.fillStyle=col;ctx.fillRect(ox+x*s,oy+y*s,Math.ceil(s),Math.ceil(s));
-    if(known&&/^[A-Z]$/.test(c)&&c!=='T'&&m.sites&&m.sites[c]){
+    if(!known){
+      ctx.fillStyle='#0d0f16';ctx.fillRect(ox+x*s,oy+y*s,Math.ceil(s),Math.ceil(s));
+      continue;
+    }
+    if(/^[A-Z]$/.test(c)&&c!=='T'&&m.sites&&m.sites[c]){
       ctx.fillStyle='#e3b54a';ctx.beginPath();
       ctx.moveTo(ox+x*s+s/2,oy+y*s+2);ctx.lineTo(ox+x*s+s-2,oy+y*s+s/2);
       ctx.lineTo(ox+x*s+s/2,oy+y*s+s-2);ctx.lineTo(ox+x*s+2,oy+y*s+s/2);
@@ -182,6 +237,8 @@ function render(){
       ctx.fillText(m.sites[c].name,ox+x*s+2,oy+y*s-3);
     }
   }
+  // night wash under the live markers so bands and tokens stay crisp
+  if(isNight()){ctx.fillStyle='rgba(24,32,72,0.28)';ctx.fillRect(0,0,cw,ch);}
   // bands visible to the march
   Watch.visible().forEach(function(b){
     ctx.fillStyle='#c0392b';
