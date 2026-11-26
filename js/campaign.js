@@ -338,7 +338,7 @@ function restNight(){
     c.layUsed=false;c.fx={};
   });
   UI.log('good','A bed, a basin, and dawn at the window: the company wakes at 07:00.');
-  Game.autosave();UI.hud();UI.renderParty();
+  Game.autosave();UI.hud();UI.renderParty();Game.refreshHour();
   return true;
 }
 function spendCuresOnWounded(c){

@@ -31,7 +31,9 @@ function partyMV(){
   var mv=12;UI.party().forEach(function(c){if(c.dead)return;mv=Math.min(mv,Rules.RACES[c.race].mv);});
   return mv;
 }
-function isNight(){var h=G.time%1440/60;return h<5.5||h>=20;}
+/* The hour's light belongs to Look, next to the palette: the overland map, the
+   watch and the sky all read the same curve, so night means one thing here. */
+function isNight(){return Look.isNight(G.time);}
 function revealAround(){
   var r=isNight()?2.2:4.2;
   var m=map();
@@ -176,7 +178,7 @@ function camp(){
       UI.party().forEach(function(c){if(c.dead)return;if(c.hp>0)c.hp=Math.min(c.maxhp,c.hp+1);
         if(c.prep&&c.mem)Object.keys(c.prep).forEach(function(sp){c.mem[sp]=c.prep[sp];});c.layUsed=false;c.fx={};});
       UI.log('good','You camp and take the watch in turns. Dawn finds the company rested.');
-      Game.autosave();UI.hud();UI.renderParty();
+      Game.autosave();UI.hud();UI.renderParty();Game.refreshHour();
     }},{label:'Not yet'}]});
 }
 function visit(){
@@ -384,8 +386,12 @@ function render(){
       ctx.fillText(m.sites[c].name,ox+x*s+2,oy+y*s-3);
     }
   }
-  // night wash under the live markers so bands and tokens stay crisp
-  if(isNight()){ctx.fillStyle='rgba(24,32,72,0.28)';ctx.fillRect(0,0,CW,CH);}
+  /* Night wash under the live markers so bands and tokens stay crisp. Two washes,
+     both from the hour: the plate goes cold and indigo through the dark hours and
+     catches an ember veil at either end of the day. */
+  var oday=Look.daylight(G.time);
+  if(oday.starA>0.04){ctx.fillStyle='rgba(24,32,72,'+(0.32*oday.starA).toFixed(3)+')';ctx.fillRect(0,0,CW,CH);}
+  if(oday.dusk>0.04){ctx.fillStyle='rgba(196,98,44,'+(0.15*oday.dusk).toFixed(3)+')';ctx.fillRect(0,0,CW,CH);}
   /* Map tokens are the same likeness as the foe you fight and the entry you
      read. A red disc stays under each band so danger still reads at a glance,
      and below ~22 px per tile a silhouette is mush, so tokens fall back to the

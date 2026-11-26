@@ -552,8 +552,17 @@ function doCamp(){
         c.layUsed=false;c.fx={};
       });
       UI.log('good','You rest until dawn. Spells return to hand; the march begins afresh.');
-      autosave();UI.hud();UI.renderParty();
+      autosave();UI.hud();UI.renderParty();refreshHour();
     }},{label:'Stay here'}]});
+}
+
+/* A rest spends eight hours without spending a step, and the view paints on
+ * demand rather than continuously - so without being told, the sky you wake to
+ * is still the sky you fell asleep under. Only the waking moments need to say so. */
+function refreshHour(){
+  if(!X)return;
+  if(X.mode==='wild'){if(window.Over&&Over.render)Over.render();return;}
+  if(X.mode==='local'){renderView(1);paintMinimap();}
 }
 
 /* ============ Movement ============ */
@@ -695,7 +704,9 @@ function svcBlurb(loc){
 function renderView(scale){
   if(!X||X.mode!=='local')return 0;
   X.cam.dir=G.dir;
-  var ms=View3D.render(X.prep,X.cam,scale,{entities:billEntities()});
+  // The hour travels in as data. A local view is painted on demand, so the clock
+  // arrives with the frame rather than the renderer reaching for it.
+  var ms=View3D.render(X.prep,X.cam,scale,{entities:billEntities(),time:G.time});
   X.slowFrame=ms>26;
   if(scale>=1)governFrames(ms);
   return ms;
@@ -751,6 +762,7 @@ function wipe(){
     else if(c.hp>0)anyAlive=true;
   });
   UI.log('bad','Darkness, then a long dawn: the company wakes where the foes left them, robbed of a tenth of its gold.');
+  refreshHour();
   Journal.note('Overrun and left for dead; woke at daybreak.','defeat');
   autosave();
   if(!anyAlive){gameOver();return;}
@@ -1110,7 +1122,7 @@ return{
   openFullMap:openFullMap,aheadText:aheadText,cellAt:cellAt,
   equip:equip,drop:drop,quitToTitle:quitToTitle,
   doSearch:doSearch,doCamp:doCamp,reveal:reveal,opaque:opaque,
-  giveToCarrier:giveToCarrier,wipe:wipe,mapId:function(){return G&&G.map;},
+  giveToCarrier:giveToCarrier,wipe:wipe,refreshHour:refreshHour,mapId:function(){return G&&G.map;},
   paintMinimap:paintMinimap,paintBandPips:function(){paintMinimap();},awardXP:awardXP,
   consumePack:consumePack,usePackItem:usePackItem,scrollSphereOK:scrollSphereOK,knockCasters:knockCasters
 };

@@ -98,7 +98,11 @@ function hud(){
   var m=MAPS[G.map];
   $('location').textContent=(mod?mod.name+' · ':'')+(m?m.name:'');
   $('ahead').textContent=Game.aheadText();
-  $('clock').textContent=Game.fmtTime(G.time);
+  /* The clock carries the hour's glyph. The clock has always been running - it is
+     only recently that anything out of doors agreed with it, and a player who
+     never notices the sky should still be able to read the hour at a glance. */
+  var dl=Look.daylight(G.time);
+  $('clock').textContent=(dl.night?'\u263E':(dl.dusk>0.35?'\u263C':'\u2600'))+' '+Game.fmtTime(G.time);
   $('gold').textContent=G.gold+' gp';
   var pips=$('pips');pips.innerHTML='';
   party().forEach(function(c){

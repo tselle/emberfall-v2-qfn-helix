@@ -63,6 +63,73 @@ function floorBudget(){return TIERS[tier].floorPx;}
 
 function dpr(){return Math.max(1,Math.min(3,window.devicePixelRatio||1));}
 
+/* ================= the hour =================
+   One description of the light, asked of the campaign clock in minutes. Before
+   this the sky was authored as permanent dusk and the day cycle existed only as
+   two identical private isNight() helpers deciding when monsters got braver. The
+   clock was already advancing - fights spend ten minutes, a march an hour, a
+   rest eight hours - and nothing painted any of it.
+   Colours are keyframed through the day and interpolated; nothing is computed
+   from astronomy, because the Emberwild's sky is meant to carry ember at the
+   horizon whatever the hour, and a physically-correct noon would look like a
+   different game. Azimuth follows the renderer's own convention: 0 east, π/2
+   south, π west - so the sun stands due south at noon, as it should. */
+var DAYKEYS=[
+  /* h    zenith            mid               horizon           haze            amb */
+  [0.0,  [9,12,26],   [15,20,40],   [34,38,60],    [62,70,96],   0.42],
+  [4.6,  [11,15,33],  [26,28,54],   [64,54,74],    [80,80,108],  0.48],
+  [6.0,  [38,52,94],  [112,92,112], [222,132,84],  [146,118,112],0.72],
+  [8.5,  [56,86,150], [120,146,190],[196,178,150], [160,168,178],0.95],
+  [12.0, [70,106,176],[136,168,208],[200,204,206], [178,188,198],1.12],
+  [16.5, [64,96,164], [150,152,176],[214,178,132], [180,170,164],1.05],
+  [19.0, [36,38,78],  [104,70,92],  [232,126,62],  [158,108,88], 0.80],
+  [20.6, [16,20,42],  [30,32,58],   [120,74,64],   [104,88,96],  0.52],
+  [24.0, [9,12,26],   [15,20,40],   [34,38,60],    [62,70,96],   0.42]
+];
+var DAY={};               // memoised per minute-bucket: painters run this per frame
+function mix3(a,b,f){return [a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f,a[2]+(b[2]-a[2])*f];}
+function ramp(h,a,b,x,y){if(h<=a)return 0;if(h>=b)return y;return x+(y-x)*(h-a)/(b-a);}
+function daylight(mins){
+  var t=Math.floor((mins==null?720:mins)/5);           // five-minute buckets are plenty
+  var key=(t*5/60)%24;
+  if(t<0)t=0;
+  var cache=daylight._c||(daylight._c={});
+  var hit=cache[key];
+  if(hit)return hit;
+  var i=0;while(i<DAYKEYS.length-2&&DAYKEYS[i+1][0]<=key)i++;
+  var A=DAYKEYS[i],B=DAYKEYS[i+1];
+  var f=(key-A[0])/(B[0]-A[0]);if(f<0)f=0;if(f>1)f=1;
+  // the day's light: nothing before first light, full by mid-morning, gone by night
+  var sun=Math.min(ramp(key,5.2,7.6,0,1),1-ramp(key,17.6,20.2,0,1));
+  // and the two hours of the day that are worth painting for
+  var dusk=Math.min(1,Math.exp(-Math.pow(key-6,2)/1.1)+Math.exp(-Math.pow(key-19,2)/1.5));
+  var p=Math.max(0,Math.min(1,(key-6)/12));
+  var np=((key-19+24)%24)/11;                          // the night arc, dusk to dawn
+  var out={
+    h:key,
+    sun:sun,
+    dusk:dusk,
+    night:(key<5.5||key>=20),
+    starA:Math.max(0,1-sun*1.7),
+    lamp:1-sun,
+    zen:mix3(A[1],B[1],f),
+    mid:mix3(A[2],B[2],f),
+    hor:mix3(A[3],B[3],f),
+    haze:mix3(A[4],B[4],f),
+    ambMul:A[5]+(B[5]-A[5])*f,
+    sunAz:Math.PI*p,
+    sunEl:Math.sin(Math.PI*p)*0.86,
+    sunUp:(key>5.6&&key<18.4),
+    moonAz:Math.PI*Math.max(0,Math.min(1,np)),
+    moonEl:Math.sin(Math.PI*Math.max(0,Math.min(1,np)))*0.80,
+    moonUp:(key<5.4||key>=18.6)
+  };
+  // at most 288 keys exist (a day in five-minute buckets), so the cache is bounded
+  cache[key]=out;
+  return out;
+}
+function isNight(mins){return daylight(mins).night;}
+
 function cssBox(cv){
   var w=cv.clientWidth,h=cv.clientHeight;
   if(!w||!h){var r=cv.getBoundingClientRect();w=w||r.width;h=h||r.height;}
@@ -203,5 +270,6 @@ return {REF_H:REF_H,REF_W:REF_W,MAX_ASPECT:MAX_ASPECT,C:C,TIERS:TIERS,
   tierIndex:tierIndex,tierId:tierId,setTier:setTier,nudge:nudge,
   lock:lock,isLocked:isLocked,
   colw:colw,billCol:billCol,floorBudget:floorBudget,dpr:dpr,
+  daylight:daylight,isNight:isNight,
   fit:fit,fitBox:fitBox,slicePx:slicePx,billPx:billPx,scaleOf:scaleOf,report:report};
 })();

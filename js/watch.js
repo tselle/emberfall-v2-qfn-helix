@@ -9,7 +9,7 @@ function uid(){if(!G.bandSeq)G.bandSeq=1;return 'b'+(G.bandSeq++);}
 function mapId(){return Game.mapId();}
 function cell(x,y){return Game.cellAt(mapId(),x,y);}
 function passable(c){return c!=null&&c!==''&&'^~#'.indexOf(c)<0;}
-function night(){var h=G.time%1440/60;return h<5.5||h>=20;}
+function night(){return Look.isNight(G.time);}   // one definition of dark, see overland.js
 function wild(){var m=MAPS[mapId()];return !!(m&&m.overland);}
 function sightOf(b){
   var base=(MONSTERS[b.mon]&&MONSTERS[b.mon].sight)||6;

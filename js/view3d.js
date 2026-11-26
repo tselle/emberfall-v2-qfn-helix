@@ -875,10 +875,24 @@ var ATMOS={
   keep:{hr:50,hg:47,hb:44,k:0.0160,roof:0.68,amb:0.08,sr:20,sg:19,sb:17},
   hall:{hr:56,hg:44,hb:34,k:0.0170,roof:0.66,amb:0.08,sr:22,sg:18,sb:15}
 };
-function atmosphereFor(m,outdoor){
+/* The hour reaches only what stands under the sky. A cellar at noon is a cellar
+   at midnight, and making the indoors follow the clock would just be turning the
+   lamps down in a room that has no windows. Outdoor air borrows the hour's haze
+   colour and scales its ambient; the material's own air still leads. */
+function atmosphereFor(m,outdoor,day){
   var key=m&&m.id?m.id:'crypt';
   if(outdoor&&key!=='wild')key='town';
-  return ATMOS[key]||ATMOS.crypt;
+  var a=ATMOS[key]||ATMOS.crypt;
+  if(!outdoor||!day)return a;
+  /* The AIR takes the hour's colour - that is what an hour is. The GROUND keeps
+     its own earth and mostly changes how much of it comes back, or a noon street
+     turns to pale ash and the moor forgets it was ever dark heather. */
+  var t=0.55,gl=0.52+0.58*day.sun;   // ground brightness: bare moonlight to full day
+  return {hr:a.hr*(1-t)+day.haze[0]*t,
+          hg:a.hg*(1-t)+day.haze[1]*t,
+          hb:a.hb*(1-t)+day.haze[2]*t,
+          k:a.k,roof:a.roof,amb:a.amb*day.ambMul,
+          sr:a.sr*gl,sg:a.sg*gl,sb:a.sb*gl};
 }
 /* Lit windows, lantern glass and embers hold their glow at range. Read once per
    texture as "how much warm, blue-starved light does this texel column carry", so
@@ -1621,19 +1635,25 @@ function skyAssets(){
   var lit=puff('rgba(255,214,164,.95)','rgba(226,140,86,.40)');
   return SKY={stars:stars,far:far,near:near,clouds:clouds,cool:cool,lit:lit};
 }
-function drawSky(ctx,w2,horizon,ang,fov,atmo){
+function drawSky(ctx,w2,horizon,ang,fov,atmo,day){
   var S=skyAssets(),TAU=Math.PI*2,tanH=Math.tan(fov/2),hw=w2*0.5;
   atmo=atmo||ATMOS.town;
+  day=day||Look.daylight(720);
+  function mixc(a,b,f){return [a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f,a[2]+(b[2]-a[2])*f];}
   // The air the ground hazes into is the air the horizon has to dissolve into,
   // or the world stops at its own skyline.
   function airward(r,g2,b,t){
     return 'rgb('+((r*(1-t)+atmo.hr*t)|0)+','+((g2*(1-t)+atmo.hg*t)|0)+','+((b*(1-t)+atmo.hb*t)|0)+')';
   }
-  // sky body: zenith indigo down to a smoke-and-ember horizon
+  // sky body: the hour's zenith down through its mid-tone to its own horizon,
+  // the lowest stop already leaning into the air the ground will haze into
   var g=ctx.createLinearGradient(0,0,0,horizon);
-  g.addColorStop(0,'#141a38');g.addColorStop(0.42,'#2e2a4e');
-  g.addColorStop(0.74,'#5b3f52');g.addColorStop(0.93,airward(147,84,63,0.42));
-  g.addColorStop(1,airward(184,118,63,0.55));
+  var zen=day.zen,mid=day.mid,hor=day.hor;
+  g.addColorStop(0,'rgb('+(zen[0]|0)+','+(zen[1]|0)+','+(zen[2]|0)+')');
+  g.addColorStop(0.42,'rgb('+(mid[0]|0)+','+(mid[1]|0)+','+(mid[2]|0)+')');
+  g.addColorStop(0.74,airward(mixc(mid,hor,0.55)[0],mixc(mid,hor,0.55)[1],mixc(mid,hor,0.55)[2],0.20));
+  g.addColorStop(0.93,airward(hor[0],hor[1],hor[2],0.42));
+  g.addColorStop(1,airward(hor[0],hor[1],hor[2],0.55));
   ctx.fillStyle=g;ctx.fillRect(0,0,w2,horizon);
   function dx(az){                                  // azimuth → screen x, or null if behind
     var d=az-ang;d=((d%TAU)+TAU*1.5)%TAU-Math.PI;
@@ -1646,32 +1666,57 @@ function drawSky(ctx,w2,horizon,ang,fov,atmo){
     return isFinite(x)?x:null;
   }
   function yOf(el){return horizon-el*horizon*0.94;}
-  // the fire that is going out somewhere in the west, fixed to the world
+  // the fire that is going out somewhere in the north, fixed to the world. It is
+  // a feature of the country, not of the hour - but a bonfire washes out in
+  // daylight and owns a dark sky, so the sun decides how loud it is.
+  var fireA=0.50*(1-day.sun*0.80);
   var gx=dx(4.71);
-  if(gx!==null){
+  if(gx!==null&&fireA>0.03){
     var rg=ctx.createRadialGradient(gx,horizon,2,gx,horizon,Math.max(120,w2*0.42));
-    rg.addColorStop(0,'rgba(255,158,64,.50)');rg.addColorStop(0.35,'rgba(226,96,48,.22)');
+    rg.addColorStop(0,'rgba(255,158,64,'+fireA.toFixed(3)+')');
+    rg.addColorStop(0.35,'rgba(226,96,48,'+(fireA*0.44).toFixed(3)+')');
     rg.addColorStop(1,'rgba(60,30,50,0)');
     ctx.fillStyle=rg;ctx.fillRect(0,0,w2,horizon+1);
+  }
+  // and the sun, on the world's own arc: east at six, due south at noon, west at
+  // six. Low it is ember and smears the whole sky; high it is white and keeps to
+  // itself. It is drawn behind the ranges on purpose, so it rises out of them.
+  if(day.sunUp){
+    var sx=dx(day.sunAz);
+    if(sx!==null){
+      var sy=yOf(day.sunEl),sr=Math.max(9,horizon*0.038);   // sy may sit below the horizon line
+      var low=Math.max(0,Math.min(1,1-day.sunEl*1.5));
+      var sg=ctx.createRadialGradient(sx,sy,sr*0.35,sx,sy,sr*(5+7*low));
+      sg.addColorStop(0,'rgba(255,'+((242-46*low)|0)+','+((216-136*low)|0)+',.92)');
+      sg.addColorStop(0.18,'rgba(255,'+((226-70*low)|0)+','+((176-118*low)|0)+','+(0.42+0.24*low).toFixed(3)+')');
+      sg.addColorStop(1,'rgba(120,70,60,0)');
+      ctx.save();ctx.beginPath();ctx.rect(0,0,w2,horizon+1);ctx.clip();
+      ctx.fillStyle=sg;ctx.fillRect(sx-sr*9,sy-sr*9,sr*18,sr*18);
+      ctx.fillStyle='rgba(255,'+((248-36*low)|0)+','+((228-126*low)|0)+',.95)';
+      ctx.beginPath();ctx.arc(sx,sy,sr,0,TAU);ctx.fill();
+      ctx.restore();
+    }
   }
   // stars, fading out toward the glow at the horizon
   for(var i=0;i<S.stars.length;i++){
     var st=S.stars[i],x=dx(st.az);
     if(x===null)continue;
-    var a=st.b*Math.min(1,st.el*3.1);
+    var a=st.b*Math.min(1,st.el*3.1)*day.starA;
     if(a<=0.02)continue;
     ctx.fillStyle='rgba(236,230,214,'+a.toFixed(3)+')';
     ctx.fillRect(x,yOf(st.el),st.s,st.s);
   }
-  // a low moon, gibbous, with its own halo
-  var mx=dx(2.30),my=yOf(0.42);
-  if(mx!==null){
+  // the moon, gibbous, on the night's own arc: it comes up around dusk and goes
+  // down around dawn, and daylight does not hide it so much as drown it
+  var mup=day.moonUp?(0.30+0.70*day.starA):0;
+  var mx=dx(day.moonAz),my=yOf(day.moonEl);
+  if(mx!==null&&mup>0.05){
     var mr=Math.max(14,horizon*0.055);
     var hg=ctx.createRadialGradient(mx,my,mr*0.6,mx,my,mr*5.2);
-    hg.addColorStop(0,'rgba(255,238,206,.30)');hg.addColorStop(1,'rgba(255,220,180,0)');
+    hg.addColorStop(0,'rgba(255,238,206,'+(0.30*mup).toFixed(3)+')');hg.addColorStop(1,'rgba(255,220,180,0)');
     ctx.fillStyle=hg;ctx.fillRect(mx-mr*6,my-mr*6,mr*12,mr*12);
-    ctx.fillStyle='#f2e6c8';ctx.beginPath();ctx.arc(mx,my,mr,0,TAU);ctx.fill();
-    ctx.fillStyle='rgba(190,176,152,.55)';
+    ctx.fillStyle='rgba(242,230,200,'+mup.toFixed(3)+')';ctx.beginPath();ctx.arc(mx,my,mr,0,TAU);ctx.fill();
+    ctx.fillStyle='rgba(190,176,152,'+(0.55*mup).toFixed(3)+')';
     ctx.beginPath();ctx.arc(mx-mr*0.32,my-mr*0.18,mr*0.26,0,TAU);ctx.fill();
     ctx.beginPath();ctx.arc(mx+mr*0.28,my+mr*0.30,mr*0.18,0,TAU);ctx.fill();
   }
@@ -1683,8 +1728,10 @@ function drawSky(ctx,w2,horizon,ang,fov,atmo){
     var x1=dx(c.az-c.da),x2=dx(c.az+c.da);
     var wpx=(x2!==null&&x1!==null)?Math.abs(x2-x1):c.da*2*hw/tanH*0.5;
     var hpx=Math.max(6,wpx*c.h*6.5);
-    ctx.globalAlpha=c.a;
-    ctx.drawImage(c.warm?S.lit:S.cool,cx2-wpx*0.5,yOf(c.el)-hpx*0.5,wpx,hpx);
+    // cloud light comes from underneath the same sun; at either end of the day
+    // even the cool banks catch fire, which is what those hours are for
+    ctx.globalAlpha=Math.min(1,c.a*(0.30+0.70*day.sun+0.55*day.dusk));
+    ctx.drawImage((c.warm||day.dusk>0.5)?S.lit:S.cool,cx2-wpx*0.5,yOf(c.el)-hpx*0.5,wpx,hpx);
   }
   ctx.globalAlpha=1;ctx.restore();
   // ridgelines, filled from the projected table so they slide as you turn
@@ -1703,8 +1750,14 @@ function drawSky(ctx,w2,horizon,ang,fov,atmo){
   }
   // aerial perspective on the ranges themselves: the far ridge is further into
   // the air than the near one, so it is lighter and colder, not just smaller
-  ridgeLine(S.far,airward(43,47,69,0.50),'rgba(255,168,96,.14)');
-  ridgeLine(S.near,airward(27,31,44,0.22),'rgba(255,150,84,.10)');
+  // the rim light is the hour's: ember along the ranges at either end of the
+  // day, cold moonlight through the middle of the night, unremarkable at noon
+  function rimcol(){
+    if(day.starA>0.45)return 'rgba(172,194,236,'+(0.05+0.12*day.starA).toFixed(3)+')';
+    return 'rgba(255,168,96,'+(0.04+0.26*day.dusk+0.05*day.sun).toFixed(3)+')';
+  }
+  ridgeLine(S.far,airward(43,47,69,0.50),rimcol());
+  ridgeLine(S.near,airward(27,31,44,0.22),rimcol());
   // haze where the world meets the sky, so the ranges sink into the dusk
   var hz=ctx.createLinearGradient(0,horizon-Math.max(8,horizon*0.10),0,horizon+1);
   hz.addColorStop(0,'rgba('+atmo.hr+','+atmo.hg+','+atmo.hb+',0)');
@@ -1729,7 +1782,11 @@ function render(prep,cam,scale,opts){
   var horizon=h2/2;
   var outdoor=!!(prep.def.outdoor||prep.def.safe||prep.def.overland);
   var mat=materialFor(prep.def,prep.def.id);
-  var atmo=atmosphereFor(mat,outdoor);
+  // The hour arrives as data, like the camera and the entities: this file never
+  // reaches into the campaign clock, so the swatch and minimap painters get a
+  // neutral noon and the sky only changes when the caller says it is later.
+  var day=Look.daylight(opts&&opts.time!=null?opts.time:720);
+  var atmo=atmosphereFor(mat,outdoor,day);
   // Base fills are the floor of the model: whatever the cast does not reach, and
   // the fallback when pixel work is unavailable, already carries this air's colour.
   ctx.fillStyle='rgb('+((atmo.hr*0.30)|0)+','+((atmo.hg*0.30)|0)+','+((atmo.hb*0.32)|0)+')';
@@ -1740,9 +1797,13 @@ function render(prep,cam,scale,opts){
   ctx.fillStyle=flr;ctx.fillRect(0,horizon,w2,h2-horizon);
   // camera
   var a0=(cam.ang!==undefined)?cam.ang:[-Math.PI/2,0,Math.PI/2,Math.PI][cam.dir];
+  // A facing that is not a number paints the north wall rather than crashing the
+  // frame: the projections below all take cos/sin of this and hand the results to
+  // createRadialGradient, which throws on a non-finite argument.
+  if(typeof a0!=='number'||!isFinite(a0))a0=-Math.PI/2;
   var fov=1.15;
   var cx=cam.x,cy=cam.y;
-  if(outdoor)drawSky(ctx,w2,horizon,a0,fov,atmo);
+  if(outdoor)drawSky(ctx,w2,horizon,a0,fov,atmo,day);
   // A wall slice is a constant *visual* width: one design unit wide, whatever
   // the device resolution. Motion frames shrink the space, so shrink with it.
   var colw=Math.max(1,Math.round(Look.slicePx(REC)*scale));
@@ -2234,10 +2295,15 @@ function render(prep,cam,scale,opts){
       var lfr=Math.max(1.6,llh*0.020);
       /* The halo is a glow, not a disc of fire: left unclamped it grows past the
          frame at close range and flattens the whole view to orange. */
-      var lrad=Math.min(h2*0.30,Math.max(7,llh*0.26));
+      /* A lamp burns the same at every hour; what changes is what it is competing
+         with. Out of doors the halo answers the sky - thin at noon, master of a
+         dark street. Indoors it is the only light there is, so the hour is held
+         out of it entirely. */
+      var lgain=outdoor?(0.82+0.52*day.lamp):1,lgrow=outdoor?(0.94+0.22*day.lamp):1;
+      var lrad=Math.min(h2*0.30,Math.max(7,llh*0.26*lgrow));
       var lgr=ctx.createRadialGradient(lsx,lhy,0,lsx,lhy,lrad);
-      lgr.addColorStop(0,'rgba(255,206,136,.55)');
-      lgr.addColorStop(0.34,'rgba(236,140,60,.20)');
+      lgr.addColorStop(0,'rgba(255,206,136,'+(0.55*lgain).toFixed(3)+')');
+      lgr.addColorStop(0.34,'rgba(236,140,60,'+(0.20*lgain).toFixed(3)+')');
       lgr.addColorStop(1,'rgba(168,84,26,0)');
       ctx.fillStyle=lgr;
       ctx.beginPath();ctx.arc(lsx,lhy,lrad,0,6.29);ctx.fill();
