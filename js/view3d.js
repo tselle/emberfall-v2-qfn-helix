@@ -1,55 +1,301 @@
 /* Emberfall — js/view3d.js
- * View3D.init/prepare/render/minimap/figTex.
+ * View3D.init/resize/prepare/render/minimap/figTex.
  * Software raycaster on Canvas 2D: DDA column cast against the prepared
- * grid, textured walls sampled from procedurally painted 64² tiles with a
- * half-res mip, side shading, distance fog and base contact darkening.
+ * grid; walls, floor and ceiling all sample procedurally painted materials
+ * (256² base, four mip levels, trilinear on the cast surfaces) chosen per map
+ * by material set; a world-anchored 360° environment above the horizon; side
+ * shading, distance fog and base contact darkening.
  * A per-column depth buffer clips billboarded entities — bands, treasure,
- * stairs — depth-sorted far to near. No game-rule effects. */
+ * stairs — depth-sorted far to near. The cast runs natively in device pixels;
+ * Look owns the backing-store size and the wall slice width, so the view is
+ * sharp at any stage size instead of a stretched 1280×800 bitmap.
+ * No game-rule effects. */
 'use strict';
 var View3D=(function(){
-var cv=null,ctx=null,W=0,H=0;
-var COLW=4;                       // column slice width in backing pixels
-var TEX=128,TEXH=64;             // texture mip 0 and mip 1 widths (branch: crisper masonry)
-var zbuf=null,zStep=COLW,zN=0;
+var cv=null,ctx=null,W=0,H=0,REC=null,K=1;
+var TEX=128,TEXH=64;             // authored DESIGN grid every painter draws against
+/* Every material is painted once into a TEXPX² raster with a four-level mip
+   chain (base, /2, /4, /8). Painters keep their 128-unit coordinates because
+   the context is scaled, so geometry scales for free while grain is painted at
+   device resolution and therefore genuinely gains detail. Phones keep a 128²
+   base so the atlas stays a couple of megabytes instead of a dozen. */
+var TEXPX=256;
+function texBaseSize(){
+  // The quality tier is the affordability signal: 256² from `high` upward, 128²
+  // below it. Built once, lazily, on the first frame — a tier nudge later on
+  // changes slice width and cast budget but does not repaint the atlas, because
+  // rebuilding a dozen materials mid-stroll would itself be a hitch.
+  return (Look.tierIndex?Look.tierIndex():2)>=2?256:128;
+}
+function mipChain(c){                    // four levels, browser box-filtered
+  var out=[c],src=c,w=TEXPX;
+  for(var m=1;m<4;m++){
+    var n=Math.max(8,w>>1);
+    var cm=document.createElement('canvas');cm.width=n;cm.height=n;
+    var gm=cm.getContext('2d');gm.imageSmoothingEnabled=true;
+    try{gm.imageSmoothingQuality='high';}catch(e){}
+    gm.drawImage(src,0,0,n,n);
+    out.push(cm);src=cm;w=n;
+  }
+  return out;
+}
+/* Mip choice: the level closest to one texel per screen pixel, biased to the
+   sharper side, so near masonry keeps its joints and far masonry stops shimmering. */
+function pickMip(chain,px){
+  var i=0;
+  while(i<chain.length-1&&chain[i].width>px*1.4)i++;
+  return chain[i];
+}
+var zbuf=null,zN=0;
 var lastMs=0;
 
-function init(canvas){cv=canvas;ctx=canvas.getContext('2d');W=cv.width;H=cv.height;}
+function init(canvas){
+  cv=canvas;ctx=canvas.getContext('2d');
+  resize();
+}
+/* Re-fit the backing store to the stage and the device. Cheap and idempotent;
+ * render() also re-fits, so a resize mid-battle never draws at the old size. */
+function resize(){
+  REC=Look.fit(cv)||REC;
+  if(!REC)return null;
+  if(REC.virtual){            // stage hidden: paint against the current bitmap
+    W=cv.width;H=cv.height;K=H/Look.REF_H;
+  }else{W=REC.bw;H=REC.bh;K=REC.k;}
+  return REC;
+}
+
+/* Open ground: whatever a street, a yard, a garden or a path is paved with, it is
+   not a room. Used to keep an outdoor corner from being mistaken for a building. */
+var OPENGROUND=',=+Tn%~. ';
+
+/* Which tiles have a roof over them.
+   Indoors the answer is all of them, which is what the renderer already assumes.
+   On a village map the question is real: a shop is a walkable tile behind three
+   walls, and unless something says so it is drawn as a courtyard with the night
+   sky over its own plaster — which is the single biggest reason a town building
+   reads as an interior instead of a building. So the grid is asked directly: a
+   non-ground tile walled on three sides is a room, and gets a ceiling above it
+   and the builders' floor beneath it. Overland maps get no roofs at all: there
+   is nothing built on them, and a mountain corner is not a shrine's ceiling. */
+function roofsFor(w,h,wall,out,char,mapDef){
+  var roof=new Uint8Array(w*h);
+  var outdoor=!!(mapDef.outdoor||mapDef.safe||mapDef.overland);
+  if(!outdoor){roof.fill(1);return roof;}
+  if(mapDef.overland)return roof;
+  /* Gates stay open. A gate is a gap in a wall, not a room, and roofing one turns
+     the road out of a village into a covered tunnel - which is exactly what the
+     south gate of a generated village looked like until this was excluded. */
+  var noRoof='GS';
+  if(mapDef.exit)for(var ek in mapDef.exit)noRoof+=ek;
+  /* A room is found by flooding it, not by counting a tile's neighbours.
+     Counting neighbours worked while every shop was one tile deep and failed the
+     moment one was two: the front half of a two-deep shop has only two walls
+     beside it - the other side is its own back room - so it got no ceiling and
+     the shop stood open to the sky above its own doorstep. So: flood the tiles
+     that are neither wall nor open ground, and if what comes out is small, walled
+     and reached by no more than a door or two, it is a room and it is roofed. */
+  var seen=new Uint8Array(w*h),cells=[],stack=[];
+  for(var y=0;y<h;y++)for(var x=0;x<w;x++){
+    var i=y*w+x;
+    if(wall[i]||seen[i])continue;
+    if(OPENGROUND.indexOf(char[i])>=0||noRoof.indexOf(char[i])>=0)continue;
+    cells.length=0;cells.push(i);seen[i]=1;
+    var doors=0,walls=0;
+    for(var k=0;k<cells.length;k++){
+      var c=cells[k],cx=c%w,cy=(c/w)|0;
+      var nb=[cx+1,cy,cx-1,cy,cx,cy+1,cx,cy-1];
+      for(var n=0;n<4;n++){
+        var nx=nb[n*2],ny=nb[n*2+1];
+        if(nx<0||ny<0||nx>=w||ny>=h){walls++;continue;}
+        var j=ny*w+nx;
+        if(wall[j]){walls++;continue;}
+        if(OPENGROUND.indexOf(char[j])>=0||noRoof.indexOf(char[j])>=0){doors++;continue;}
+        if(seen[j])continue;
+        seen[j]=1;cells.push(j);
+      }
+    }
+    // a yard, a warren or a marker in the middle of a street: not a room
+    if(cells.length>30||doors>2||walls<cells.length)continue;
+    /* A single tile needs three walls before it is a room: set into a wall line,
+       flanked either side and closed behind. One wall at its back is a marker standing
+       in a yard, and roofing one lays flagstone in the middle of a street - which is
+       what Thornwick's churchyard did, a paved patch in the grass with nothing on it. */
+    if(cells.length===1&&walls<3)continue;
+    for(k=0;k<cells.length;k++)roof[cells[k]]=1;
+  }
+  return roof;
+}
 
 function prepare(mapDef){
   var g=mapDef.grid,h=g.length,w=g[0].length;
   var wall=new Uint8Array(w*h),out=new Uint8Array(w*h),char=new Array(w*h);
   for(var y=0;y<h;y++)for(var x=0;x<w;x++){
-    var c=g[y][x],i=y*w+x;
+    // a row shorter than the first must not hand undefined to the renderer
+    var c=x<g[y].length?g[y][x]:'#',i=y*w+x;
     char[i]=c;
     wall[i]=(c==='#'||c==='H'||c==='B'||c==='T'||c==='F'||c==='^'||c==='~')?1:0;
     out[i]=(mapDef.outdoor||mapDef.safe||mapDef.overland)?1:0;
   }
-  return {def:mapDef,w:w,h:h,wall:wall,out:out,char:char,
-          solid:function(x,y){if(x<0||y<0||x>=w||y>=h)return true;return wall[y*w+x]===1;}};
+  var roof=roofsFor(w,h,wall,out,char,mapDef);
+  var prep={def:mapDef,w:w,h:h,wall:wall,out:out,char:char,roof:roof,lights:null,
+            doorW:null,doorRooms:null,
+            solid:function(x,y){if(x<0||y<0||x>=w||y>=h)return true;return wall[y*w+x]===1;}};
+  /* Doors first: the lamps and the goods are placed from the fronts. */
+  var sd=shopDoors(prep);
+  prep.doorW=sd.mask;prep.doorFaces=sd.faces;prep.doorRooms=sd.rooms;
+  prep.lights=mapLights(w,h,wall,mapDef,sd.faces);
+  prep.props=propsFor(prep);
+  return prep;
+}
+
+/* ---- placed light sources -------------------------------------------------
+   The map already says where a lamp belongs: a sconce goes on a wall that faces
+   open ground, a brazier sits where passages meet. So the list is DERIVED from
+   the map instead of hand-authored per level — every generated delve gets honest
+   lighting for free. Deterministic from a tile hash, so a torch is in the same
+   place every time you see the room, and capped so a huge keep does not pay for
+   hundreds of them. `on` is the wall tile it hangs on (wall sconce), `x`/`y` the
+   point the flame burns at, `rad` the world radius it reaches. */
+function hashL(x,y,salt){
+  var h=(x*73856093)^(y*19349663);
+  var s=String(salt||'m');
+  for(var i=0;i<s.length;i++)h=Math.imul(h^s.charCodeAt(i),16777619);
+  return (h>>>0)/4294967295;
+}
+/* Which faces of a service room are its front. A tile wearing a service letter is a
+   door when one of its neighbours is open ground under the sky: that face looks out on
+   the street, and a room that opens on the street has a door in it, not a hole. The
+   mask makes those faces solid to the eye - the wall continues across the doorway and
+   the goods behind it stay behind it - while the tile stays walkable, so the door is
+   something you go through rather than something you admire. */
+function shopDoors(prep){
+  var w=prep.w,h=prep.h,mask=new Uint8Array(w*h),faces=[],rooms=[];
+  var mapDef=prep.def;
+  if(!mapDef||mapDef.overland||!mapDef.locs||!mapDef.grid)return {mask:mask,faces:faces,rooms:rooms};
+  var NB=[[0,-1],[0,1],[-1,0],[1,0]];
+  for(var k in mapDef.locs){
+    if(k.length!==1)continue;
+    var tiles=[],x,y;
+    for(y=1;y<h-1;y++)for(x=1;x<w;x++)if(prep.char[y*w+x]===k)tiles.push([x,y]);
+    if(!tiles.length)continue;
+    var svc=(mapDef.locs[k]&&mapDef.locs[k].svc)||'',room=null;
+    for(var i=0;i<tiles.length;i++)for(var j=0;j<4;j++){
+      var nx=tiles[i][0]+NB[j][0],ny=tiles[i][1]+NB[j][1];
+      if(nx<1||ny<1||nx>=w-1||ny>=h-1)continue;
+      if(prep.solid(nx,ny)||prep.roof[ny*w+nx])continue;   // not street: an inner wall or the yard
+      mask[tiles[i][1]*w+tiles[i][0]]=1;
+      faces.push({x:tiles[i][0],y:tiles[i][1],dx:NB[j][0],dy:NB[j][1],svc:svc});
+      if(!room)room={x:tiles[i][0],y:tiles[i][1],dx:NB[j][0],dy:NB[j][1],svc:svc,tiles:tiles};
+    }
+    if(room)rooms.push(room);
+  }
+  return {mask:mask,faces:faces,rooms:rooms};
+}
+
+/* What stands in each shop. Goods go against the back wall and along the sides. The
+   board is set against the wall beside the door, not in front of it: it is there to be
+   read from the street, and a board in the doorway only ever gets in the way. */
+function propsFor(prep){
+  var out=[],rooms=prep.doorRooms||[];
+  if(!rooms.length)return out;
+  var w=prep.w;
+  function open(x,y){return x>=0&&y>=0&&x<w&&y<(prep.h)&&!prep.solid(Math.floor(x),Math.floor(y));}
+  for(var i=0;i<rooms.length;i++){
+    var room=rooms[i],door=[room.x,room.y],dx=room.dx,dy=room.dy,tiles=room.tiles;
+    var back=null,bd=-1,t;
+    for(t=0;t<tiles.length;t++){
+      if(tiles[t][0]===door[0]&&tiles[t][1]===door[1])continue;
+      var d=(tiles[t][0]-door[0])*dx+(tiles[t][1]-door[1])*dy;
+      if(bd<0||d<bd){bd=d;back=tiles[t];}
+    }
+    if(!back)back=door;
+    var kit=PROPS_FOR[room.svc]||['crate','barrel','stool'];
+    var lx=dy!==0?1:0,ly=dx!==0?1:0;
+    var bx=back[0]+0.5-dx*0.28,by=back[1]+0.5-dy*0.28;
+    var slots=[[0,0],[lx*0.30,ly*0.30],[-lx*0.30,-ly*0.30]];
+    for(t=0;t<kit.length&&t<slots.length;t++){
+      var px=bx+slots[t][0],py=by+slots[t][1];
+      if(!open(px,py))continue;
+      out.push({x:px,y:py,spr:'prop:'+kit[t]});
+    }
+    /* The board stands on the pavement in front of the wall, off the door's centre, so
+       it marks the entrance without ever standing in it. It is placed inside the street
+       tile rather than part way into the next one, because half the shops in a village
+       have a neighbour's wall there and the board quietly vanished. */
+    var sx=door[0]+0.5+dx*0.90+lx*0.30,sy=door[1]+0.5+dy*0.90+ly*0.30;
+    if(open(sx,sy))out.push({x:sx,y:sy,spr:'prop:sign'});
+  }
+  return out;
+}
+
+function mapLights(w,h,wall,def,doorFaces){
+  var out=[],salt=(def&&def.id)||'m';
+  /* Density is set by area, not by a per-cell coin flip. A rate is easier to write
+     and impossible to predict: the same number gave a crypt two lamps and a cellar
+     nine, so the rooms that needed light most were the ones that got none. Instead:
+     every wall face is a candidate, and the ones whose hash comes up highest fill
+     the map's quota. */
+  var spacing=def&&def.mat==='hall'?8:def&&def.mat==='town'?8:def&&def.mat==='crypt'?13:
+              def&&def.mat==='keep'?11:def&&def.mat==='mine'?10:10;
+  if(def&&def.overland)spacing=42;
+  var cand=[],open=0,x,y,i;
+  for(y=1;y<h-1;y++)for(x=1;x<w-1;x++){
+    i=y*w+x;
+    if(!wall[i]){open++;continue;}
+    var dirs=[];
+    if(!wall[i-1])dirs.push([1,0]);
+    if(!wall[i+1])dirs.push([-1,0]);
+    if(!wall[i-w])dirs.push([0,1]);
+    if(!wall[i+w])dirs.push([0,-1]);
+    if(!dirs.length)continue;
+    /* A brazier needs room to stand, but requiring three open faces in a warren of
+       corridors means it never appears at all. */
+    cand.push({x:x,y:y,d:dirs.length>=2&&hashL(x,y,salt+'b')>0.62?1:0,n:dirs,h:hashL(x,y,salt)});
+  }
+  cand.sort(function(a,b){return b.h-a.h;});
+  var quota=Math.max(2,Math.min(26,Math.round(open/spacing)));
+  for(i=0;i<cand.length&&out.length<quota;i++){
+    var c=cand[i];
+    // a sconce burns just off the wall it hangs on; a brazier stands on open ground
+    var off=c.d?0.0:0.30;
+    var d=c.n[(hashL(c.x,c.y,salt+'d')*c.n.length)|0];
+    out.push({x:c.x+0.5+d[0]*(1+off),y:c.y+0.5+d[1]*(1+off),
+              on:[c.x,c.y],floor:!!c.d,
+              i:c.d?1.05:0.82,rad:c.d?5.6:4.4,
+              fl:c.d?0.10:0.13});
+  }
+  /* A lamp burns beside every shopfront door. Not decoration: a door you cannot make
+     out is a wall you cannot read, and light is how a place says it is open. It hangs
+     on the street side of the wall by the jamb, so the pavement in front of a shop is
+     the brightest ground in the lane and the light has somewhere to come from. Driven
+     off the door faces, so generated villages get theirs for free. */
+  if(doorFaces&&doorFaces.length){
+    for(var fi=0;fi<doorFaces.length;fi++){
+      var DF=doorFaces[fi],llx=DF.dy!==0?1:0,lly=DF.dx!==0?1:0;
+      var lpx=DF.x+0.5+DF.dx*0.52+llx*0.34,lpy=DF.y+0.5+DF.dy*0.52+lly*0.34;
+      var ltx=lpx|0,lty=lpy|0;
+      if(ltx<0||lty<0||ltx>=w||lty>=h||wall[lty*w+ltx])continue;   // a lamp needs air to hang in
+      out.push({x:lpx,y:lpy,on:[DF.x,DF.y],floor:0,i:0.95,rad:3.4,fl:0.16});
+    }
+  }
+  return out;
 }
 
 /* ================= procedural wall textures ================= */
-var TEXCACHE=null;
+var TEXCACHE=null,CTEX=null;
 function buildTextures(){
   if(TEXCACHE)return TEXCACHE;
+  TEXPX=texBaseSize();
+  GTEX=null;CTEX=null;               // ground and ceilings share the raster size
   TEXCACHE={};
   function tile(painter){
     try{
-      var c0=document.createElement('canvas');c0.width=TEX;c0.height=TEX;
-      var g0=c0.getContext('2d');painter(g0,TEX);
-      var c1=document.createElement('canvas');c1.width=TEXH;c1.height=TEXH;
-      var g1=c1.getContext('2d');g1.drawImage(c0,0,0,TEXH,TEXH);
-      return {full:c0,mip:c1};
+      var SC=TEXPX/TEX;
+      var c0=document.createElement('canvas');c0.width=TEXPX;c0.height=TEXPX;
+      var g0=c0.getContext('2d');g0.setTransform(SC,0,0,SC,0,0);
+      painter(g0,TEX);
+      return mkTex(c0);
     }catch(e){return null;}
-  }
-  function grain(g,base,jit,seed){
-    var r=new Rules.RNG(seed);
-    g.fillStyle=base;g.fillRect(0,0,TEX,TEX);
-    for(var i=0;i<900;i++){
-      var x=r.int(0,TEX-1),y=r.int(0,TEX-1),v=r.int(-jit,jit);
-      g.fillStyle='rgba('+(v>0?255:0)+','+(v>0?255:0)+','+(v>0?255:0)+','+(Math.abs(v)/300)+')';
-      g.fillRect(x,y,1,1);
-    }
   }
   TEXCACHE['#']=tile(function(g){   // warm irregular masonry
     grain(g,'#77705f',22,11);
@@ -82,6 +328,68 @@ function buildTextures(){
     }
     g.fillStyle='rgba(20,14,10,.4)';g.fillRect(0,0,TEX,2);
   });
+  /* A shopfront, painted as one face: the wall continues across the whole tile and the
+     door is cut into it. This is what a traveller reads from the lane - a closed leaf
+     with a lit window beside it and a beam over its head - and it is also what makes a
+     building an enclosed thing rather than a shelter: with no face across the opening,
+     the ceiling of the room starts at the street line and every shop looks like a carport.
+     v runs down from the wall head, so the door head sits at 0.31 of the storey. */
+  TEXCACHE['*']=tile(function(g){
+    var S=TEX/64;                                     // paint in 64-unit terms, fill the grid
+    grain(g,'#c9bb9d',14,77);
+    var r=new Rules.RNG(7777);
+    for(var i=0;i<40;i++){g.fillStyle='rgba(116,98,70,'+(0.05+r.chance(.5)?.07:.03)+')';
+      g.beginPath();g.arc(r.int(0,TEX),r.int(0,TEX),r.int(5,14),0,6.29);g.fill();}
+    g.save();g.scale(S,S);
+    function beam(x,y,w,h){g.fillStyle='#38281a';g.fillRect(x,y,w,h);
+      g.fillStyle='rgba(96,70,40,.85)';g.fillRect(x,y+1,w,1);
+      g.fillStyle='rgba(12,8,4,.65)';g.fillRect(x,y+h-1,w,1);}
+    beam(0,0,64,4);beam(0,60,64,4);                   // wall head and base
+    beam(3,0,4,64);beam(56,0,4,64);                   // corner posts
+    // weather streaks under the wall head
+    g.fillStyle='rgba(70,56,36,.22)';
+    for(var sx=12;sx<52;sx+=9)g.fillRect(sx,5,3,r.int(6,14));
+    /* the shop window: lit glass, oak frame, mullions, a stone sill */
+    var WX=38,WY=25,WW=21,WH=18;
+    var rg=g.createRadialGradient(WX+WW*0.5,WY+WH*0.55,1,WX+WW*0.5,WY+WH*0.55,WW*0.95);
+    rg.addColorStop(0,'rgba(252,206,132,.98)');rg.addColorStop(0.55,'rgba(214,148,70,.92)');
+    rg.addColorStop(1,'rgba(112,68,34,.92)');
+    g.fillStyle=rg;g.fillRect(WX,WY,WW,WH);
+    g.fillStyle='rgba(60,36,14,.55)';g.fillRect(WX,WY+WH*0.62,WW,WH*0.38);  // goods in the window
+    g.fillStyle='#2f2116';
+    g.fillRect(WX+WW/2-0.8,WY,1.6,WH);g.fillRect(WX,WY+WH/2-0.8,WW,1.6);    // mullions
+    beam(WX-2,WY-3,WW+4,3);beam(WX-2,WY+WH,WW+4,3);
+    beam(WX-2,WY-3,3,WH+6);beam(WX+WW-1,WY-3,3,WH+6);
+    g.fillStyle='#7d6a4e';g.fillRect(WX-3,WY+WH+3,WW+6,3);                  // sill
+    /* the door: planked, braced, ironed, with a small glazed quarter light */
+    var DX=12,DY=20,DW=22,DH=59-DY;   // leaf reaches the threshold at 0.92 of the storey
+    beam(DX-2,DY-4,DW+4,4);                                                // lintel over the head
+    g.fillStyle='#4a3421';g.fillRect(DX,DY,DW,DH);
+    for(var p=0;p<4;p++){                                                  // vertical boards
+      var pv=r.int(-10,10);
+      g.fillStyle='rgb('+(82+pv)+','+(58+pv*0.7|0)+','+(36+pv*0.5|0)+')';
+      g.fillRect(DX+1+p*(DW-2)/4,DY+1,(DW-2)/4-1,DH-2);
+      g.fillStyle='rgba(16,10,4,.55)';g.fillRect(DX+p*(DW-2)/4,DY,1,DH);
+    }
+    g.fillStyle='#3a2818';g.fillRect(DX+1,DY+DH*0.42,DW-2,3);              // brace rail
+    g.save();g.translate(DX+2,DY+DH-3);g.rotate(-0.62);
+    g.fillStyle='#3a2818';g.fillRect(0,0,DW*0.8,3);g.restore();            // diagonal brace
+    g.fillStyle='#2a2118';
+    g.fillRect(DX+1,DY+6,DW*0.55,2.4);g.fillRect(DX+1,DY+DH*0.62,DW*0.6,2.4);  // iron straps
+    g.fillStyle='#8d8478';g.beginPath();g.arc(DX+DW-4,DY+DH*0.5,1.9,0,6.29);g.fill();
+    g.fillStyle='#5a5248';g.beginPath();g.arc(DX+DW-4,DY+DH*0.5,1,0,6.29);g.fill();
+    // quarter light in the door head, glowing
+    var QX=DX+DW*0.28,QY=DY+3,QW=DW*0.44,QH=6;
+    g.fillStyle='rgba(248,198,120,.95)';g.fillRect(QX,QY,QW,QH);
+    g.fillStyle='#2f2116';g.fillRect(QX+QW/2-0.7,QY,1.4,QH);
+    g.fillStyle='#38281a';g.fillRect(QX-1.5,QY-1.5,QW+3,1.5);g.fillRect(QX-1.5,QY+QH,QW+3,1.5);
+    g.fillRect(QX-1.5,QY-1.5,1.5,QH+3);g.fillRect(QX+QW,QY-1.5,1.5,QH+3);
+    // jamb posts either side of the leaf
+    beam(DX-3,DY-1,3,DH+1);beam(DX+DW,DY-1,3,DH+1);
+    g.fillStyle='#6d6255';g.fillRect(DX-1,59,DW+2,3);                       // threshold stone
+    g.fillStyle='rgba(252,196,120,.16)';g.fillRect(DX,DY,DW,DH);            // light past the leaf
+    g.restore();
+  });
   TEXCACHE['H']=tile(function(g){   // Tudor half-timber: plaster + dark oak frame
     grain(g,'#cfc2a4',14,33);
     var r=new Rules.RNG(3333);
@@ -109,7 +417,9 @@ function buildTextures(){
     g.fillStyle='rgba(0,0,0,.4)';g.fillRect(0,TEX-6,TEX,6);
     // a low window with oiled paper glow
     g.fillStyle='#2c2013';g.fillRect(24,12,16,14);
-    g.fillStyle='rgba(226,180,110,.5)';g.fillRect(26,14,12,10);
+    // a lamp-lit pane: bright enough that the emissive mask keeps it warm at
+    // range instead of letting the air wash it out to the haze colour
+    g.fillStyle='rgba(240,190,110,.92)';g.fillRect(26,14,12,10);
     g.fillStyle='#3a2a17';g.fillRect(31,12,2,14);g.fillRect(24,18,16,2);
   });
   TEXCACHE['T']=tile(function(g){   // deep foliage mass with lit crowns
@@ -152,6 +462,81 @@ function buildTextures(){
     for(var y=6;y<TEX;y+=12){g.beginPath();
       for(var x=0;x<=TEX;x+=8)g.lineTo(x,y+Math.sin(x*.5+y)*2.4);g.stroke();}
   });
+  TEXCACHE['C']=tile(function(g){   // crypt: pale ashlar, carved string course, cellar lichen
+    grain(g,'#4d4b52',18,181);
+    var r=new Rules.RNG(182);
+    for(var y=0;y<TEX;y+=26){
+      var off=(Math.floor(y/26)%2)*13+r.int(-1,1);
+      for(var x=off;x<TEX;x+=32+r.int(0,5)){
+        var v=r.int(-13,13);
+        g.fillStyle='rgb('+(84+v)+','+(82+v)+','+(88+v)+')';
+        g.fillRect(x+1,y+1,30,24);
+      }
+    }
+    g.fillStyle='rgba(20,20,26,.66)';
+    for(var y2=0;y2<TEX;y2+=26)g.fillRect(0,y2,TEX,2);
+    g.fillStyle='rgba(198,190,166,.13)';g.fillRect(0,11,TEX,4);
+    g.fillStyle='rgba(112,126,92,.20)';
+    var rl=new Rules.RNG(183);
+    for(var i=0;i<22;i++)g.fillRect(rl.int(0,TEX-8),rl.int(TEX-44,TEX),rl.int(3,9),rl.int(6,38));
+    g.strokeStyle='rgba(56,52,62,.5)';g.lineWidth=2;
+    g.beginPath();g.moveTo(46,74);g.arc(58,74,12,Math.PI,0);g.stroke();
+  });
+  TEXCACHE['R']=tile(function(g){   // cave and mine: hacked rock, no courses at all
+    grain(g,'#574d42',26,211);
+    var r=new Rules.RNG(212);
+    for(var i=0;i<30;i++){                       // wedged facets
+      var x=r.int(0,TEX),y=r.int(0,TEX),w=r.int(9,28),h=r.int(7,21),v=r.int(-18,18);
+      g.fillStyle='rgba('+(92+v)+','+(82+v)+','+(70+v)+',.5)';
+      g.beginPath();g.moveTo(x,y);g.lineTo(x+w,y+r.int(-4,7));g.lineTo(x+r.int(2,w),y+h);g.closePath();g.fill();
+    }
+    g.strokeStyle='rgba(15,12,9,.62)';g.lineWidth=2;
+    for(var k=0;k<16;k++){                       // deep cracks
+      var sx=r.int(0,TEX),sy=r.int(0,TEX);
+      g.beginPath();g.moveTo(sx,sy);
+      for(var st=0;st<4;st++)g.lineTo(sx+r.int(-18,18),sy+r.int(4,22));
+      g.stroke();
+    }
+    g.fillStyle='rgba(18,15,12,.34)';g.fillRect(0,TEX-14,TEX,14);
+  });
+  TEXCACHE['K']=tile(function(g){   // keep: fine ashlar with a mason's mark
+    grain(g,'#8a8274',16,241);
+    var r=new Rules.RNG(242);
+    for(var y=0;y<TEX;y+=16){
+      var off=(Math.floor(y/16)%2)*12;
+      for(var x=off;x<TEX;x+=24){
+        var v=r.int(-11,11);
+        g.fillStyle='rgb('+(146+v)+','+(138+v)+','+(124+v)+')';
+        g.fillRect(x+1,y+1,22,14);
+      }
+    }
+    g.fillStyle='rgba(38,34,30,.6)';
+    for(var y2=0;y2<TEX;y2+=16)g.fillRect(0,y2,TEX,1.6);
+    g.fillStyle='rgba(255,251,238,.10)';
+    for(var y3=0;y3<TEX;y3+=16)g.fillRect(0,y3+1.6,TEX,1.2);
+    g.strokeStyle='rgba(52,46,40,.55)';g.lineWidth=2;
+    g.beginPath();g.moveTo(52,62);g.lineTo(64,46);g.lineTo(76,62);g.moveTo(58,56);g.lineTo(70,56);g.stroke();
+    g.fillStyle='rgba(20,17,14,.16)';g.fillRect(0,TEX-14,TEX,14);
+  });
+  TEXCACHE['i']=tile(function(g){   // the inside of a wall: lime wash over lath, no windows
+    grain(g,'#a2988a',18,29);
+    var r=new Rules.RNG(9091);
+    for(var i=0;i<20;i++){g.fillStyle='rgba(70,62,50,'+(0.04+r.chance(.5)?.05:.02)+')';
+      g.beginPath();g.arc(r.int(0,TEX),r.int(0,TEX),r.int(4,11),0,6.29);g.fill();}
+    // soot creeping down from the joists, darker than any street facade
+    for(var x=0;x<TEX;x+=17){
+      var grd=g.createLinearGradient(0,0,0,TEX*0.55);
+      grd.addColorStop(0,'rgba(36,29,21,.38)');grd.addColorStop(1,'rgba(36,29,21,0)');
+      g.fillStyle=grd;g.fillRect(x,0,6+r.int(0,8),TEX*0.55);
+    }
+    // the scantling behind the wash, just legible
+    g.strokeStyle='rgba(88,74,54,.26)';g.lineWidth=1;
+    for(var x2=8;x2<TEX;x2+=34){g.beginPath();g.moveTo(x2,6);g.lineTo(x2,TEX-11);g.stroke();}
+    // wainscot and the dark line where wall meets boards
+    g.fillStyle='#2e2317';g.fillRect(0,TEX-8,TEX,8);
+    g.fillStyle='rgba(126,100,64,.5)';g.fillRect(0,TEX-8,TEX,1);
+    g.fillStyle='rgba(16,12,9,.4)';g.fillRect(0,TEX-2,TEX,2);
+  });
   TEXCACHE['F']=TEXCACHE['#'];
   TEXCACHE['S']=TEXCACHE['#'];       // secret doors look like their wall
   return TEXCACHE;
@@ -161,6 +546,266 @@ function texFor(c){
   return t[c]||t['#'];
 }
 
+function mkTex(c0){
+  var ch=mipChain(c0);
+  return {full:ch[0],mip:ch[1],chain:ch,base:c0,vars:[],
+          emit:emitColumns(ch[0].getContext('2d').getImageData(0,0,TEXPX,TEXPX))};
+}
+/* Same stone, different weathering. A facade that repeats tile for tile is the
+   fastest way to make a hand-painted world look like a spreadsheet, and the fix
+   must not be "more art": copy the base and lay seeded weathering over it —
+   damp washes, pale bloom, water streaks under the sill. Built LAZILY, one per
+   material per first sighting, so a map that never shows a mine never pays for a
+   weathered mine. */
+function variantOf(t,seed){
+  if(!t||!t.base)return t;
+  var v=t.vars[seed];
+  if(v)return v;
+  try{
+    var c=document.createElement('canvas');
+    c.width=t.base.width;c.height=t.base.height;
+    var g=c.getContext('2d');
+    g.drawImage(t.base,0,0);
+    var r=new Rules.RNG(9001+seed*7717);
+    var CW=c.width,CHh=c.height,i;
+    /* Kept deliberately faint. Weathering strong enough to admire on a 256² swatch
+       is strong enough to read as blob-brush dirt when stretched over a wall three
+       steps away — the difference between a facade that has lived and one that has
+       been painted with stains. */
+    for(i=0;i<11;i++){                      // large washes: damp dark, efflorescent pale
+      var wx=r.int(0,CW),wy=r.int(0,CHh),rad=r.int(CW*0.05,CW*0.20);
+      var damp=r.chance(.62);
+      var al=damp?0.075:0.045;
+      var gr=g.createRadialGradient(wx,wy,0,wx,wy,rad);
+      gr.addColorStop(0,damp?'rgba(9,8,6,'+al.toFixed(3)+')'
+                            :'rgba(216,210,188,'+al.toFixed(3)+')');
+      gr.addColorStop(1,'rgba(0,0,0,0)');
+      g.fillStyle=gr;g.beginPath();g.arc(wx,wy,rad,0,6.29);g.fill();
+    }
+    for(i=0;i<6;i++){                       // streaks running down from the top
+      var sx=r.int(0,CW),len=r.int(CHh*0.18,CHh*0.62);
+      g.fillStyle='rgba(16,13,10,'+(0.028+r.chance(.5)*0.034).toFixed(3)+')';
+      g.fillRect(sx,0,Math.max(1,CW*0.010),len);
+    }
+    for(i=0;i<6;i++){                       // scuffs along the base
+      var bx=r.int(0,CW),by=r.int(CHh*0.72,CHh*0.97);
+      g.fillStyle='rgba(0,0,0,.055)';
+      g.beginPath();g.ellipse(bx,by,r.int(CW*0.02,CW*0.07),r.int(2,CHh*0.03),0,0,6.29);g.fill();
+    }
+    v=mkTex(c);v.base=null;                  // variants do not spawn variants
+    t.vars[seed]=v;return v;
+  }catch(e){return t;}
+}
+function grain(g,base,jit,seed){
+  var r=new Rules.RNG(seed);
+  g.fillStyle=base;g.fillRect(0,0,TEX,TEX);
+  var SC=TEXPX/TEX,sz=TEX/TEXPX,n=Math.round(900*SC*SC);   // speckle density is per area, not per texture
+  for(var i=0;i<n;i++){
+    var x=r.int(0,TEX-sz),y=r.int(0,TEX-sz),v=r.int(-jit,jit);
+    g.fillStyle='rgba('+(v>0?255:0)+','+(v>0?255:0)+','+(v>0?255:0)+','+(Math.abs(v)/300)+')';
+    g.fillRect(x,y,sz,sz);
+  }
+}
+
+/* ---- what a wall character LOOKS like in this particular building. The same
+   '#' is brick in a cellar, crypt ashlar under a barrow, hacked rock in a mine.
+   Explicit def.mat wins; otherwise the map's own name says what it is. */
+var MATS={
+  town:{id:'town',wall:{'#':'#','H':'H','B':'B','^':'^','~':'~'},interior:'i',ceil:'plaster',floor:{'.':'plank'}},
+  cellar:{id:'cellar',wall:{'#':'B','H':'B','B':'B','^':'R','~':'R'},ceil:'beams',floor:{'.':'slab','D':'slab','L':'slab'}},
+  crypt:{id:'crypt',wall:{'#':'C','H':'C','B':'C','^':'R','~':'R'},ceil:'crypt',floor:{'.':'cryptslab','D':'cryptslab','L':'cryptslab'}},
+  mine:{id:'mine',wall:{'#':'R','H':'K','B':'K','^':'R','~':'R'},ceil:'rock',floor:{'.':'earth','D':'earth','L':'earth'}},
+  keep:{id:'keep',wall:{'#':'K','H':'H','B':'B','^':'R','~':'~'},ceil:'plaster',floor:{'.':'flag','D':'flag','L':'flag'}},
+  hall:{id:'hall',wall:{'#':'K','H':'H','B':'B','^':'R','~':'~'},ceil:'beams',floor:{'.':'plank','D':'plank','L':'plank'}},
+  wild:{id:'wild',wall:{'#':'#','H':'T','B':'#','^':'^','~':'~'},ceil:null}
+};
+var MATCACHE=new WeakMap();
+function materialFor(def,id){
+  if(!def)return MATS.town;
+  var hit=MATCACHE.get(def);
+  if(hit!==undefined)return hit;
+  var out=def.mat?MATS[def.mat]:null;
+  if(!out){
+    var t=((id||'')+' '+(def.name||'')+' '+(def.locName||'')).toLowerCase();
+    if(/cellar|brewery|sewer|crypt|tomb|barrow|ossuar|charnel|catacomb/.test(t))
+      out=MATS[/cellar|brewery|sewer/.test(t)?'cellar':'crypt'];
+    else if(/mine|tunnel|quarry|underdark|cave|delve|warren/.test(t))out=MATS.mine;
+    else if(/keep|hold|citadel|bastion|tower|castle/.test(t))out=MATS.keep;
+    else if(/hall|longhouse|barrack|mess|yard/.test(t))out=MATS.hall;
+    else if(def.overland)out=MATS.wild;
+    else out=/thornwick|town|village|street|market|gate|square/.test(t)?MATS.town:MATS.crypt;
+  }
+  MATCACHE.set(def,out);
+  return out;
+}
+/* ---- ONE lighting and haze model ------------------------------------------------
+   Everything the eye receives is described by a single distance response:
+
+       lit  = 1 / (1 + d²k)     light that reached you
+       airT = 1 − lit           air that got in the way
+
+   A wall, a floor tile and a roof plank at the same distance therefore converge on
+   the same colour, which is the difference between a torch-lit room and three
+   unrelated fog recipes stapled together. Light is warm and falls off; the air
+   takes over. Each theme carries its own air and its own shadow floor, so nothing
+   crushes to pure black. k is the density: outdoor air is thin, underground air is
+   thick. Outdoor air at dusk genuinely glows, so its haze is bright. Underground,
+   the air is the absence of light: it is dark and merely tinted — damp brown in a
+   cellar, cold violet under a barrow, blue-green in a worked mine. amb is the
+   fill that keeps a corner from crushing to pure black. */
+var ATMOS={
+  town:{hr:126,hg:104,hb:104,k:0.0042,roof:1.00,amb:0.30,sr:36,sg:36,sb:42},
+  wild:{hr:122,hg:106,hb:100,k:0.0040,roof:1.00,amb:0.32,sr:34,sg:36,sb:40},
+  cellar:{hr:44,hg:40,hb:41,k:0.0200,roof:0.66,amb:0.07,sr:18,sg:17,sb:18},
+  crypt:{hr:46,hg:44,hb:56,k:0.0180,roof:0.62,amb:0.07,sr:18,sg:17,sb:24},
+  mine:{hr:38,hg:48,hb:47,k:0.0220,roof:0.60,amb:0.06,sr:16,sg:20,sb:20},
+  keep:{hr:50,hg:47,hb:44,k:0.0160,roof:0.68,amb:0.08,sr:20,sg:19,sb:17},
+  hall:{hr:56,hg:44,hb:34,k:0.0170,roof:0.66,amb:0.08,sr:22,sg:18,sb:15}
+};
+function atmosphereFor(m,outdoor){
+  var key=m&&m.id?m.id:'crypt';
+  if(outdoor&&key!=='wild')key='town';
+  return ATMOS[key]||ATMOS.crypt;
+}
+/* Lit windows, lantern glass and embers hold their glow at range. Read once per
+   texture as "how much warm, blue-starved light does this texel column carry", so
+   the renderer pays one array lookup per wall column, not per pixel. */
+function emitColumns(img){
+  var w=img.width,h=img.height,d=img.data,e=new Float32Array(w);
+  for(var x=0;x<w;x++){
+    var m=0;
+    for(var y=0;y<h;y+=2){
+      var i=((y*w+x)<<2),R=d[i],G=d[i+1],B=d[i+2];
+      // Only genuinely luminous colour counts. Pale plaster is bright but not
+      // lit; a lamp-lit pane is warm, blue-starved and brighter than the air.
+      if(R>168&&R>B+70&&G>B+25){var st=(R-B)/170*(G/255);if(st>m)m=st;}
+    }
+    e[x]=m>0.62?1:m*1.6;
+  }
+  return e;
+}
+
+/* ---- ceilings. The roof is cast with the same machinery as the floor, so it is
+   the same building: joists over a cellar, ribs over a crypt, rock over a delve. */
+function ceilTextures(){
+  if(CTEX)return CTEX;
+  buildTextures();
+  CTEX={};
+  function ct(painter){
+    var SC=TEXPX/TEX;
+    var c=document.createElement('canvas');c.width=TEXPX;c.height=TEXPX;
+    var g=c.getContext('2d');g.setTransform(SC,0,0,SC,0,0);
+    try{painter(g);}catch(e){}
+    var ch=mipChain(c),img=[];
+    for(var i=0;i<ch.length;i++)img.push({d:ch[i].getContext('2d').getImageData(0,0,ch[i].width,ch[i].height),w:ch[i].width});
+    return {chain:img};
+  }
+  CTEX.beams=ct(function(g){        // cellar: joists and boards, soot in the grooves
+    g.fillStyle='#33271a';g.fillRect(0,0,TEX,TEX);
+    for(var x=0;x<TEX;x+=21){
+      g.fillStyle='#46351f';g.fillRect(x,0,17,TEX);
+      g.fillStyle='rgba(14,10,6,.5)';g.fillRect(x+16,0,4,TEX);
+      g.fillStyle='rgba(226,196,150,.05)';g.fillRect(x+1,0,2,TEX);
+    }
+    var r=new Rules.RNG(302);
+    for(var i=0;i<10;i++){g.fillStyle='rgba(18,13,8,.45)';g.fillRect(0,r.int(0,TEX),TEX,r.int(2,5));}
+    g.fillStyle='rgba(8,6,4,.5)';g.fillRect(0,0,TEX,7);g.fillRect(0,TEX-7,TEX,7);
+  });
+  CTEX.vault=ct(function(g){        // groin vault
+    g.fillStyle='#6d6558';g.fillRect(0,0,TEX,TEX);
+    var r=new Rules.RNG(311);
+    for(var i=0;i<420;i++){var v=r.int(-20,20);
+      g.fillStyle='rgba('+(120+v)+','+(112+v)+','+(98+v)+',.5)';
+      g.fillRect(r.int(0,TEX),r.int(0,TEX),r.int(2,7),r.int(2,6));}
+    g.strokeStyle='rgba(30,27,24,.7)';g.lineWidth=6;
+    g.beginPath();g.moveTo(0,0);g.lineTo(TEX,TEX);g.moveTo(TEX,0);g.lineTo(0,TEX);g.stroke();
+    g.fillStyle='rgba(22,20,18,.28)';
+    g.beginPath();g.moveTo(0,0);g.lineTo(TEX,0);g.lineTo(TEX/2,TEX/2);g.closePath();g.fill();
+    g.beginPath();g.moveTo(0,TEX);g.lineTo(TEX,TEX);g.lineTo(TEX/2,TEX/2);g.closePath();g.fill();
+    g.fillStyle='rgba(255,240,210,.10)';g.beginPath();g.arc(TEX/2,TEX/2,12,0,6.29);g.fill();
+  });
+  CTEX.crypt=ct(function(g){        // ribbed crypt vault with a carved boss
+    g.fillStyle='#494750';g.fillRect(0,0,TEX,TEX);
+    var r=new Rules.RNG(321);
+    for(var i=0;i<460;i++){var v=r.int(-18,18);
+      g.fillStyle='rgba('+(80+v)+','+(78+v)+','+(86+v)+',.5)';
+      g.fillRect(r.int(0,TEX),r.int(0,TEX),r.int(2,6),r.int(2,7));}
+    g.strokeStyle='rgba(22,22,28,.8)';g.lineWidth=6;
+    g.beginPath();g.moveTo(0,0);g.lineTo(TEX,TEX);g.moveTo(TEX,0);g.lineTo(0,TEX);
+    g.moveTo(TEX/2,0);g.lineTo(TEX/2,TEX);g.moveTo(0,TEX/2);g.lineTo(TEX,TEX/2);g.stroke();
+    g.fillStyle='rgba(200,192,168,.16)';g.beginPath();g.arc(TEX/2,TEX/2,13,0,6.29);g.fill();
+    g.strokeStyle='rgba(18,18,22,.9)';g.lineWidth=2;g.beginPath();g.arc(TEX/2,TEX/2,7,0,6.29);g.stroke();
+    g.fillStyle='rgba(112,126,92,.14)';
+    for(var k=0;k<16;k++)g.fillRect(r.int(0,TEX-6),r.int(0,TEX-10),r.int(3,8),r.int(6,18));
+  });
+  CTEX.rock=ct(function(g){         // hacked cave roof
+    g.fillStyle='#3d372f';g.fillRect(0,0,TEX,TEX);
+    var r=new Rules.RNG(331);
+    for(var i=0;i<54;i++){            // wedged facets, chunky enough to read overhead
+      var v=r.int(-22,22);
+      g.fillStyle='rgba('+(82+v)+','+(74+v)+','+(63+v)+',.75)';
+      var cx=r.int(0,TEX),cy=r.int(0,TEX),ww=r.int(10,30),hh=r.int(8,24);
+      g.beginPath();g.moveTo(cx,cy);g.lineTo(cx+ww,cy+r.int(-6,8));
+      g.lineTo(cx+r.int(3,ww),cy+hh);g.closePath();g.fill();}
+    g.strokeStyle='rgba(8,6,4,.55)';g.lineWidth=3;   // a few deep fractures, not scribble
+    for(var k=0;k<7;k++){var sx=r.int(0,TEX),sy=r.int(0,TEX);
+      g.beginPath();g.moveTo(sx,sy);for(var t=0;t<3;t++)g.lineTo(sx+r.int(-18,18),sy+r.int(8,26));g.stroke();}
+  });
+  CTEX.plaster=ct(function(g){      // keep: plaster panels between heavy joists
+    g.fillStyle='#8f8878';g.fillRect(0,0,TEX,TEX);
+    var r=new Rules.RNG(341);
+    for(var i=0;i<520;i++){var v=r.int(-16,16);
+      g.fillStyle='rgba('+(150+v)+','+(142+v)+','+(126+v)+',.45)';
+      g.fillRect(r.int(0,TEX),r.int(0,TEX),r.int(2,6),r.int(2,6));}
+    g.fillStyle='#4a3a26';
+    for(var y=0;y<TEX;y+=26)g.fillRect(0,y,TEX,7);
+    for(var y2=0;y2<TEX;y2+=26)for(var x=0;x<TEX;x+=30)g.fillRect(x,y2+7,7,19);
+    g.fillStyle='rgba(24,20,16,.3)';g.fillRect(0,0,TEX,4);
+  });
+  return CTEX;
+}
+
+
+/* Trilinear ground filtering. The continuous mip level is picked from how many
+   screen pixels one tile covers at this depth, then the two bracketing levels are
+   fetched and blended — which is what kills both the horizontal banding you get
+   from switching levels outright and the shimmer you get from never switching.
+   Returns module scratch, or null if the texture has no pixels. */
+var GSCRATCH=[0,0,0],GA=[0,0,0],GB=[0,0,0];
+function texFetch(t,fu,fv,out){
+  var d=t.d.data,w=t.w,wl=w-1;
+  // clamp the COORDINATE first, so the weights can never go negative and
+  // inflate the average past 255 (which is what a clamped buffer will happily
+  // paint as white).
+  if(fu<0)fu=0;else if(fu>wl-0.002)fu=wl-0.002;
+  if(fv<0)fv=0;else if(fv>wl-0.002)fv=wl-0.002;
+  var x0=fu|0,y0=fv|0,xb=x0+1>wl?wl:x0+1,yb=y0+1>wl?wl:y0+1;
+  var ax=((fu-x0)*255)|0,ay=((fv-y0)*255)|0,omx=255-ax,omy=255-ay;
+  var i00=(y0*w+x0)<<2,i10=(y0*w+xb)<<2,i01=(yb*w+x0)<<2,i11=(yb*w+xb)<<2;
+  out[0]=(d[i00]*omx+d[i10]*ax+128>>8)*omy+(d[i01]*omx+d[i11]*ax+128>>8)*ay+128>>8;
+  out[1]=(d[i00+1]*omx+d[i10+1]*ax+128>>8)*omy+(d[i01+1]*omx+d[i11+1]*ax+128>>8)*ay+128>>8;
+  out[2]=(d[i00+2]*omx+d[i10+2]*ax+128>>8)*omy+(d[i01+2]*omx+d[i11+2]*ax+128>>8)*ay+128>>8;
+}
+function groundSample(tex,u,v,px){
+  var chain=tex.chain||[{d:tex.data,w:tex.width}];
+  if(!chain[0].d)return null;
+  var top=chain.length-1;
+  var lf=Math.log(chain[0].w/Math.max(1,px))*1.4426950408889634;   // log2
+  if(!(lf>0))lf=0;else if(lf>top)lf=top;
+  var i0=lf|0,f=lf-i0;
+  var w0=chain[i0].w;
+  texFetch(chain[i0],u*w0-0.5,(1-v)*w0-0.5,GA);
+  if(f>0.02&&i0<top){
+    var w1=chain[i0+1].w;
+    texFetch(chain[i0+1],u*w1-0.5,(1-v)*w1-0.5,GB);
+    var f2=(f*255)|0,i2=255-f2;
+    GSCRATCH[0]=(GA[0]*i2+GB[0]*f2+128)>>8;
+    GSCRATCH[1]=(GA[1]*i2+GB[1]*f2+128)>>8;
+    GSCRATCH[2]=(GA[2]*i2+GB[2]*f2+128)>>8;
+    return GSCRATCH;
+  }
+  return GA;
+}
 
 /* ================= ground textures (floorcasting) ================= */
 var FBUF=null;
@@ -170,11 +815,26 @@ function groundTextures(){
   if(GTEX)return GTEX;
   GTEX={};
   function gt(painter,seed,base){
-    var c=document.createElement('canvas');c.width=64;c.height=64;
-    var g=c.getContext('2d');
-    g.fillStyle=base;g.fillRect(0,0,64,64);
+    buildTextures();                      // fixes TEXPX
+    var D=64,SC=TEXPX/D;
+    var c=document.createElement('canvas');c.width=TEXPX;c.height=TEXPX;
+    var g=c.getContext('2d');g.setTransform(SC,0,0,SC,0,0);
+    g.fillStyle=base;g.fillRect(0,0,D,D);
     try{painter(g,seed);}catch(e){}
-    return g.getImageData(0,0,64,64);
+    // grit painted in device pixels, so the bigger raster actually pays off
+    var r=new Rules.RNG((seed||7)*7+1);
+    g.setTransform(1,0,0,1,0,0);
+    for(var i=0;i<Math.round(520*SC*SC);i++){
+      var v=r.int(-24,24);
+      g.fillStyle='rgba('+(v>0?255:0)+','+(v>0?255:0)+','+(v>0?255:0)+','+(Math.abs(v)/460)+')';
+      g.fillRect(r.int(0,TEXPX-1),r.int(0,TEXPX-1),1,1);
+    }
+    var ch=mipChain(c),img=[];
+    for(var m=0;m<ch.length;m++){
+      var w=ch[m].width;
+      img.push({d:ch[m].getContext('2d').getImageData(0,0,w,w),w:w});
+    }
+    return {chain:img,data:img[0].d,width:img[0].w,height:img[0].w};
   }
   GTEX['.']=gt(function(g,s){   // worn flagstones
     var r=new Rules.RNG(801);
@@ -222,6 +882,66 @@ function groundTextures(){
     for(var w=0;w<7;w++){g.fillStyle='rgba(120,160,150,.18)';
       g.fillRect(r.int(0,50),r.int(0,60),r.int(6,14),1);}
   },806,'#27443a');
+  /* Interiors get the floor their builders laid, keyed through MATS.floor. */
+  GTEX['slab']=gt(function(g){      // cellar: damp close-laid slabs, grit in the joints
+    var r=new Rules.RNG(811);
+    for(var y=0;y<64;y+=11)for(var x=(Math.floor(y/11)%2)*6;x<64;x+=13){
+      var v=r.int(-9,9);
+      g.fillStyle='rgb('+(58+v)+','+(52+v)+','+(46+v)+')';
+      g.fillRect(x+1,y+1,11,9);
+    }
+    g.fillStyle='rgba(18,15,12,.55)';
+    for(var y2=0;y2<64;y2+=11)g.fillRect(0,y2,64,1.4);
+    g.fillStyle='rgba(96,104,84,.13)';
+    for(var i=0;i<26;i++)g.fillRect(r.int(0,60),r.int(0,60),r.int(2,6),r.int(2,5));
+  },811,'#2b2622');
+  GTEX['cryptslab']=gt(function(g){  // crypt: pale worn slabs with a carved edge
+    var r=new Rules.RNG(821);
+    for(var y=0;y<64;y+=16)for(var x=0;x<64;x+=16){
+      var v=r.int(-11,11);
+      g.fillStyle='rgb('+(96+v)+','+(93+v)+','+(88+v)+')';
+      g.fillRect(x+1,y+1,14,14);
+      g.fillStyle='rgba(220,214,196,.10)';g.fillRect(x+1,y+1,14,2);
+    }
+    g.fillStyle='rgba(20,20,24,.62)';
+    for(var y2=0;y2<64;y2+=16){g.fillRect(0,y2,64,1.6);g.fillRect(y2,0,1.6,64);}
+    g.fillStyle='rgba(112,126,92,.16)';
+    for(var i=0;i<20;i++)g.fillRect(r.int(0,58),r.int(40,62),r.int(3,9),r.int(2,8));
+  },821,'#4a4741');
+  GTEX['earth']=gt(function(g){      // mine: packed beaten earth, pick scuff and stone chips
+    var r=new Rules.RNG(831);
+    for(var i=0;i<340;i++){
+      var v=r.int(-14,14);
+      g.fillStyle='rgba('+(74+v)+','+(60+v)+','+(45+v)+',.65)';
+      g.fillRect(r.int(0,62),r.int(0,62),r.int(2,7),r.int(2,6));
+    }
+    g.strokeStyle='rgba(34,26,18,.55)';g.lineWidth=1.2;
+    for(var k=0;k<14;k++){var sx=r.int(4,58),sy=r.int(4,58);
+      g.beginPath();g.moveTo(sx,sy);g.lineTo(sx+r.int(-7,7),sy+r.int(-7,7));g.stroke();}
+    g.fillStyle='rgba(126,120,110,.28)';
+    for(var c=0;c<26;c++)g.fillRect(r.int(0,60),r.int(0,60),r.int(2,4),r.int(2,3));
+  },831,'#4a3d2e');
+  GTEX['flag']=gt(function(g){       // keep: tight ashlar flags, laid regular
+    var r=new Rules.RNG(841);
+    for(var y=0;y<64;y+=8)for(var x=(Math.floor(y/8)%2)*4;x<64;x+=9){
+      var v=r.int(-8,8);
+      g.fillStyle='rgb('+(120+v)+','+(114+v)+','+(104+v)+')';
+      g.fillRect(x+1,y+1,7,6);
+    }
+    g.fillStyle='rgba(40,36,32,.55)';
+    for(var y2=0;y2<64;y2+=8)g.fillRect(0,y2,64,1.2);
+  },841,'#6b6459');
+  GTEX['plank']=gt(function(g){      // hall: wide boards, worn along the grain
+    var r=new Rules.RNG(851);
+    for(var y=0;y<64;y+=9){
+      var v=r.int(-12,12);
+      g.fillStyle='rgb('+(92+v)+','+(70+v)+','+(46+v)+')';
+      g.fillRect(0,y+1,64,7);
+      g.fillStyle='rgba(28,20,12,.6)';g.fillRect(0,y,64,1.4);
+      for(var k=0;k<7;k++){g.fillStyle='rgba(60,44,28,.35)';
+        g.fillRect(r.int(0,60),y+2,r.int(6,20),1);}
+    }
+  },851,'#4d3a26');
   GTEX['~']=GTEX['.'];
   GTEX['?']=GTEX['.'];
   GTEX['F']=GTEX['.'];
@@ -229,64 +949,191 @@ function groundTextures(){
   return GTEX;
 }
 
+/* ================= shop goods (the things that make a room a place) =================
+   A room with nothing in it is not a shop, and no amount of correct plaster will
+   say otherwise. What stands behind a doorway is what a traveller actually reads:
+   you are not looking at the wall, you are looking at what a place keeps in its
+   opening. So each service is furnished from its own kit, and every door gets a
+   board on a post, which is how a trade was advertised when almost nobody could
+   read. */
+var PROPS_H={counter:0.42,shelf:0.80,crate:0.40,barrel:0.40,table:0.34,stool:0.20,
+             cot:0.24,altar:0.56,brazier:0.44,rack:0.72,sign:0.40};
+var PROPS_FOR={
+  inn:['table','stool','cot'],tavern:['table','barrel','brazier'],
+  general:['counter','shelf','crate'],apothecary:['counter','shelf','barrel'],
+  temple:['altar','brazier','brazier'],hall:['table','brazier','crate'],
+  armory:['rack','crate','barrel'],training:['rack','barrel','crate']
+};
+
 /* ================= sprite cache (billboards) ================= */
 var SPR={};
 function sprite(key){
   if(SPR[key]!==undefined)return SPR[key];
   var s=null;
   try{s=makeSprite(key);}catch(e){s=null;}
+  if(s&&!Array.isArray(s))s=[s];        // every sprite is a gait list now
   SPR[key]=s;return s;
+}
+/* How tall a thing stands, as a fraction of a wall. One factor for the board,
+   the vale and the in-view billboard, so a troll towers the same everywhere. */
+function entitySize(key){
+  var p=key.split(':');
+  if(p[0]==='mon'){var d=(window.MONSTERS&&MONSTERS[p[1]])||{};
+    return (window.Figures&&Figures.sizeOf)?Figures.sizeOf(d)
+      :(d.size==='L'?1.4:(d.size==='S'?0.72:1.0));}
+  if(p[0]==='chest')return 0.45;
+  if(p[0]==='prop')return PROPS_H[p[1]]||0.42;
+  return 0.8;
+}
+/* Which pose this entity wears right now. The scene repaints only while
+   something moves, so the tick advances with rendered frames rather than the
+   clock: creatures step while you walk, and hold a crisp pose when you stop.
+   Phase comes from the tile the creature stands on, so a pack is not marching
+   in lockstep. */
+var animTick=0;
+function poseOf(frames,en){
+  if(frames.length<2)return frames[0];
+  var ph=en&&en.x!==undefined?(((en.x*7+en.y*13)|0)%frames.length+frames.length)%frames.length:0;
+  return frames[((animTick>>3)+ph)%frames.length];
+}
+/* Every prop is bottom-anchored like a chest: its shadow ellipse sits on the
+   floor line and the billboard code stands it up from there. Wood is cut with a
+   dark foot and a lit top so it reads at a distance; goods are the only bright
+   colours in a room, which is why they carry the recognition. */
+function shadow(g,w,h,r){g.fillStyle='rgba(0,0,0,.38)';g.beginPath();
+  g.ellipse(w/2,h-4,w*(r||0.34),h*0.055,0,0,6.29);g.fill();}
+function plank(g,x,y,w,h,a,b){g.fillStyle=a;g.fillRect(x,y,w,h);
+  g.fillStyle=b;g.fillRect(x,y+h-2,w,2);g.fillRect(x,y,1,h);}
+function pot(g,x,y,s,c1,c2){g.fillStyle=c1;g.beginPath();
+  g.moveTo(x-s,y-s*0.4);g.quadraticCurveTo(x-s*1.15,y+s*1.2,x,y+s*1.3);
+  g.quadraticCurveTo(x+s*1.15,y+s*1.2,x+s,y-s*0.4);g.closePath();g.fill();
+  g.fillStyle=c2;g.fillRect(x-s*0.75,y-s*0.7,s*1.5,s*0.36);}
+function paintProp(kind,c,g){
+  var W,H;
+  if(kind==='counter'){W=104;H=48;c.width=W;c.height=H;shadow(g,W,H);
+    plank(g,8,20,88,24,'#5b3d22','#2f1f11');
+    for(var i=0;i<4;i++){g.fillStyle='#3d2916';g.fillRect(14+i*22,24,2,18);}
+    g.fillStyle='#7d5730';g.fillRect(4,14,96,8);
+    g.fillStyle='rgba(158,58,44,.85)';g.fillRect(10,22,84,5);
+    pot(g,26,10,6,'#7c6a52','#93805f');pot(g,76,10,5,'#5d6f5f','#728470');
+    g.fillStyle='#c9b072';g.fillRect(48,6,10,9);g.fillStyle='#8d7a4a';g.fillRect(48,6,10,2);
+    return c;}
+  if(kind==='shelf'){W=84;H=104;c.width=W;c.height=H;shadow(g,W,H,0.30);
+    g.fillStyle='#4a3220';g.fillRect(6,6,6,H-10);g.fillRect(W-12,6,6,H-10);
+    for(var s=0;s<4;s++){var yy=20+s*22;plank(g,4,yy,W-8,7,'#6b4a2a','#33220f');
+      pot(g,22,yy-6,7,['#8d5a3a','#6a7d5c','#7a6a86','#a08a4e'][s],['#a8724c','#849a72','#94849c','#c0a862'][s]);
+      pot(g,44,yy-5,6,['#5d6f7f','#8a4f45','#6f7a4c','#8c7f52'][s],['#77899a','#a5695c','#8c9a63','#ab9c6a'][s]);
+      g.fillStyle=['#7d6a4e','#8b7b5e','#6d5f4c','#7f705a'][s];g.fillRect(58,yy-11,14,11);
+      g.fillStyle='rgba(255,255,255,.10)';g.fillRect(58,yy-11,14,3);}
+    return c;}
+  if(kind==='crate'){W=76;H=56;c.width=W;c.height=H;shadow(g,W,H);
+    plank(g,4,26,40,26,'#6b4a2a','#33220f');plank(g,16,12,34,16,'#7a5734','#3d2915');
+    plank(g,46,32,26,20,'#5b3d22','#2f1f11');
+    g.fillStyle='#43301b';g.fillRect(4,34,40,2);g.fillRect(46,40,26,2);
+    g.fillStyle='#8f7d5c';g.beginPath();g.moveTo(58,32);g.quadraticCurveTo(52,14,66,16);
+    g.quadraticCurveTo(78,20,74,32);g.closePath();g.fill();
+    return c;}
+  if(kind==='barrel'){W=54;H=58;c.width=W;c.height=H;shadow(g,W,H,0.36);
+    g.fillStyle='#6b4a2a';g.beginPath();g.moveTo(12,8);g.quadraticCurveTo(2,28,12,52);
+    g.lineTo(42,52);g.quadraticCurveTo(52,28,42,8);g.closePath();g.fill();
+    g.fillStyle='#4a3220';for(var i=0;i<4;i++)g.fillRect(16+i*7,8,2,44);
+    g.fillStyle='#8d7a5c';g.fillRect(10,16,34,4);g.fillRect(9,34,36,4);
+    g.fillStyle='#7d5730';g.beginPath();g.ellipse(27,8,15,5,0,0,6.29);g.fill();
+    g.fillStyle='#3d2916';g.beginPath();g.ellipse(27,8,11,3.4,0,0,6.29);g.fill();
+    return c;}
+  if(kind==='table'){W=108;H=44;c.width=W;c.height=H;shadow(g,W,H);
+    g.fillStyle='#3d2916';g.fillRect(14,20,8,20);g.fillRect(86,20,8,20);
+    g.fillStyle='#4a3220';g.fillRect(18,26,72,5);
+    g.fillStyle='#7a5734';g.fillRect(6,14,96,8);
+    g.fillStyle='rgba(214,204,182,.9)';g.fillRect(10,22,88,6);
+    g.fillStyle='rgba(158,58,44,.8)';g.fillRect(10,27,88,2);
+    g.fillStyle='#b9a06a';g.fillRect(30,6,9,9);g.fillRect(64,7,8,8);
+    g.fillStyle='#8d7748';g.fillRect(30,6,9,2);g.fillRect(64,7,8,2);
+    return c;}
+  if(kind==='stool'){W=34;H=30;c.width=W;c.height=H;shadow(g,W,H,0.42);
+    g.fillStyle='#4a3220';g.fillRect(7,12,4,14);g.fillRect(23,12,4,14);g.fillRect(15,13,4,13);
+    g.fillStyle='#7a5734';g.beginPath();g.ellipse(17,12,13,5,0,0,6.29);g.fill();
+    g.fillStyle='#5b3d22';g.beginPath();g.ellipse(17,13,13,4,0,0,6.29);g.fill();
+    return c;}
+  if(kind==='cot'){W=98;H=34;c.width=W;c.height=H;shadow(g,W,H);
+    g.fillStyle='#4a3220';g.fillRect(6,10,6,20);g.fillRect(86,10,6,20);
+    g.fillStyle='#8f7d5c';g.fillRect(10,16,78,12);
+    g.fillStyle='#6d5b46';g.fillRect(10,22,78,6);
+    g.fillStyle='rgba(120,88,64,.95)';g.fillRect(34,14,54,10);
+    g.fillStyle='#cfc3a4';g.fillRect(12,12,20,8);
+    return c;}
+  if(kind==='altar'){W=78;H=64;c.width=W;c.height=H;shadow(g,W,H);
+    g.fillStyle='#6f6a62';g.fillRect(12,22,54,30);
+    g.fillStyle='#847f76';g.fillRect(8,16,62,8);
+    g.fillStyle='#57534c';g.fillRect(12,44,54,4);g.fillRect(8,20,62,2);
+    g.fillStyle='#4d4941';g.fillRect(20,30,38,3);
+    g.fillStyle='#d8cbaa';g.fillRect(24,4,5,13);g.fillRect(49,6,5,11);
+    g.fillStyle='#f2b659';g.beginPath();g.ellipse(26.5,2,2.6,4,0,0,6.29);g.fill();
+    g.beginPath();g.ellipse(51.5,4,2.4,3.6,0,0,6.29);g.fill();
+    return c;}
+  if(kind==='brazier'){W=46;H=52;c.width=W;c.height=H;shadow(g,W,H,0.40);
+    g.fillStyle='#3a332c';g.fillRect(9,20,4,28);g.fillRect(33,20,4,28);g.fillRect(21,22,4,26);
+    g.fillStyle='#4c443a';g.beginPath();g.moveTo(6,20);g.lineTo(40,20);g.lineTo(34,10);g.lineTo(12,10);
+    g.closePath();g.fill();
+    g.fillStyle='#2b2620';g.beginPath();g.ellipse(23,11,14,4,0,0,6.29);g.fill();
+    g.fillStyle='#c8621f';g.beginPath();g.ellipse(23,11,11,3,0,0,6.29);g.fill();
+    g.fillStyle='#f0a63c';g.beginPath();g.ellipse(20,10,4,2.2,0,0,6.29);g.fill();
+    g.beginPath();g.ellipse(28,11,3,1.8,0,0,6.29);g.fill();
+    return c;}
+  if(kind==='rack'){W=92;H=88;c.width=W;c.height=H;shadow(g,W,H,0.32);
+    g.fillStyle='#4a3220';g.fillRect(8,10,7,72);g.fillRect(W-15,10,7,72);
+    plank(g,4,26,84,7,'#6b4a2a','#33220f');plank(g,4,58,84,7,'#6b4a2a','#33220f');
+    g.fillStyle='#8b8f96';g.fillRect(22,8,5,44);g.fillRect(38,10,5,42);g.fillRect(54,9,5,43);
+    g.fillStyle='#b9bcc2';g.beginPath();g.moveTo(22,8);g.lineTo(27,2);g.lineTo(31,9);g.closePath();g.fill();
+    g.beginPath();g.moveTo(38,10);g.lineTo(43,4);g.lineTo(47,11);g.closePath();g.fill();
+    g.fillStyle='#6d6a63';g.fillRect(20,52,9,4);g.fillRect(36,54,9,4);
+    g.fillStyle='#7a5734';g.beginPath();g.ellipse(68,46,12,14,0,0,6.29);g.fill();
+    g.fillStyle='#9b6f3c';g.beginPath();g.ellipse(68,46,8,10,0,0,6.29);g.fill();
+    g.fillStyle='#c8c2b2';g.beginPath();g.ellipse(68,46,3,4,0,0,6.29);g.fill();
+    return c;}
+  if(kind==='sign'){W=70;H=108;c.width=W;c.height=H;
+    g.fillStyle='rgba(0,0,0,.34)';g.beginPath();g.ellipse(30,H-4,17,5,0,0,6.29);g.fill();
+    g.fillStyle='#4a3220';g.fillRect(26,6,7,H-10);
+    g.fillStyle='#5b3d22';g.fillRect(26,6,3,H-10);
+    g.fillStyle='#4a3220';g.fillRect(30,12,30,6);
+    g.fillStyle='#3a332c';g.fillRect(36,18,2,10);g.fillRect(54,18,2,10);
+    g.fillStyle='#6b4a26';g.fillRect(24,28,44,30);
+    g.fillStyle='#8a6631';g.fillRect(27,31,38,24);
+    g.fillStyle='rgba(232,190,110,.95)';g.beginPath();g.ellipse(46,43,10,9,0,0,6.29);g.fill();
+    g.fillStyle='#5b3d22';g.fillRect(40,40,12,3);g.fillRect(42,46,9,3);
+    g.fillStyle='#3d2916';g.fillRect(24,28,44,3);g.fillRect(24,55,44,3);
+    return c;}
+  W=52;H=52;c.width=W;c.height=H;shadow(g,W,H);
+  g.fillStyle='#6b4a2a';g.fillRect(10,16,32,32);
+  return c;
 }
 function makeSprite(key){
   var p=key.split(':'),kind=p[0];
   var c=document.createElement('canvas'),g=c.getContext('2d');
   if(kind==='mon'){
+    /* One likeness per creature, painted by Figures and cached as four gait
+       frames. The old local painter here had five silhouette branches and its
+       own colour recipe, which is why a blob-shaped shade with wings looked like
+       a man in a cloak the moment you rounded a corner. */
+    var F=window.Figures;
+    if(!F||!F.monDesc)return null;
     var id=p[1],def=(window.MONSTERS&&MONSTERS[id])||{};
-    var big=def.size==='L',small=def.size==='S';
-    c.width=96;c.height=128;g=c.getContext('2d');
-    var col=monColor(id,def);
-    var bodyW=small?26:(big?58:38),bodyH=small?40:(big?78:58);
-    var bx=48,by=120;   // feet at bottom
-    g.fillStyle='rgba(0,0,0,.45)';g.beginPath();g.ellipse(bx,by,26,8,0,0,6.29);g.fill();
-    var fig=def.fig||'humanoid';
-    if(fig==='skeleton'){
-      g.strokeStyle='#d5cdb4';g.lineWidth=4;
-      g.beginPath();g.moveTo(bx,by-bodyH);g.lineTo(bx,by-16);g.stroke();
-      g.lineWidth=3;
-      for(var r=0;r<4;r++){g.beginPath();g.moveTo(bx-12+r*1.5,by-bodyH+16+r*9);g.lineTo(bx+12-r*1.5,by-bodyH+16+r*9);g.stroke();}
-      g.beginPath();g.moveTo(bx-10,by-16);g.lineTo(bx-4,by);g.moveTo(bx+10,by-16);g.lineTo(bx+4,by);g.stroke();
-      g.fillStyle='#e8e2cc';g.beginPath();g.arc(bx,by-bodyH-8,10,0,6.29);g.fill();
-      g.fillStyle='#141018';g.fillRect(bx-6,by-bodyH-12,4,5);g.fillRect(bx+2,by-bodyH-12,4,5);
-    }else if(fig==='spider'||fig==='insect'){
-      g.strokeStyle=col;g.lineWidth=4;
-      for(var l=0;l<3;l++){g.beginPath();g.moveTo(bx,by-18);g.lineTo(bx-34,by-26+l*10);g.stroke();
-        g.beginPath();g.moveTo(bx,by-18);g.lineTo(bx+34,by-26+l*10);g.stroke();}
-      g.fillStyle=col;g.beginPath();g.ellipse(bx,by-26,20,16,0,0,6.29);g.fill();
-      g.fillStyle='#c0392b';g.fillRect(bx-5,by-32,3,3);g.fillRect(bx+2,by-32,3,3);
-    }else if(fig==='rat'||fig==='beast'||fig==='wolf'){
-      g.fillStyle=col;g.beginPath();g.ellipse(bx-4,by-22,30,15,0,0,6.29);g.fill();
-      g.beginPath();g.arc(bx+26,by-30,11,0,6.29);g.fill();
-      g.fillStyle='rgba(0,0,0,.4)';g.fillRect(bx-22,by-12,6,12);g.fillRect(bx+8,by-12,6,12);
-      g.fillStyle='#c0392b';g.fillRect(bx+28,by-33,3,3);
-    }else if(fig==='bat'||fig==='bird'){
-      g.fillStyle=col;g.beginPath();g.ellipse(bx,by-56,10,16,0,0,6.29);g.fill();
-      g.beginPath();g.moveTo(bx-8,by-62);g.quadraticCurveTo(bx-42,by-90,bx-46,by-52);g.quadraticCurveTo(bx-24,by-58,bx-8,by-50);g.fill();
-      g.beginPath();g.moveTo(bx+8,by-62);g.quadraticCurveTo(bx+42,by-90,bx+46,by-52);g.quadraticCurveTo(bx+24,by-58,bx+8,by-50);g.fill();
-      g.fillStyle='#e8b54a';g.fillRect(bx-4,by-64,3,3);g.fillRect(bx+1,by-64,3,3);
-    }else{  // humanoid and default
-      g.fillStyle=col;
-      g.beginPath();
-      g.moveTo(bx-bodyW/2,by);g.lineTo(bx-bodyW/2+4,by-bodyH*.55);
-      g.quadraticCurveTo(bx,by-bodyH-16,bx+bodyW/2-4,by-bodyH*.55);
-      g.lineTo(bx+bodyW/2,by);g.closePath();g.fill();
-      g.fillStyle=shade(col,-18);g.fillRect(bx-bodyW/2+6,by-14,bodyW-12,14);   // legs shade
-      g.fillStyle=shade(col,26);g.beginPath();g.arc(bx,by-bodyH-6,big?12:10,0,6.29);g.fill();
-      g.fillStyle='#e05a3a';g.fillRect(bx-5,by-bodyH-9,3,3);g.fillRect(bx+2,by-bodyH-9,3,3);
-      if(def.leader){g.strokeStyle='#e3b54a';g.lineWidth=3;g.beginPath();
-        g.moveTo(bx-10,by-bodyH-20);g.lineTo(bx-5,by-bodyH-30);g.lineTo(bx,by-bodyH-22);g.lineTo(bx+5,by-bodyH-30);g.lineTo(bx+10,by-bodyH-20);g.stroke();}
+    var desc=F.monDesc(id,def);
+    var still={shape:desc.shape,color:desc.color,accent:desc.accent,
+               weapon:desc.weapon,leader:desc.leader,noShadow:true};
+    var SW=104,SH=128,fx=SW/2,fy=SH-12,tall=100,frames=[];
+    for(var f=0;f<F.FRAMES;f++){
+      var fc=document.createElement('canvas');
+      fc.width=SW;fc.height=SH;
+      var fg=fc.getContext('2d');
+      fg.fillStyle='rgba(0,0,0,.42)';
+      fg.beginPath();fg.ellipse(fx,fy,SW*0.19,SH*0.045,0,0,6.29);fg.fill();
+      F.inBoxAnim(fg,still,fx,fy,tall,f);
+      frames.push(fc);
     }
-    return c;
+    return frames;
   }
+  if(kind==='prop')return paintProp(p[1],c,g);
   if(kind==='chest'){
     c.width=64;c.height=44;g=c.getContext('2d');
     g.fillStyle='rgba(0,0,0,.4)';g.beginPath();g.ellipse(32,40,24,5,0,0,6.29);g.fill();
@@ -313,25 +1160,143 @@ function makeSprite(key){
   }
   return null;
 }
-function monColor(id,def){
-  if(def.undead)return '#a8a184';
-  if((def.tags||[]).indexOf('giantkin')>=0)return '#8a6a4a';
-  if((def.tags||[]).indexOf('troll')>=0)return '#5d7d4a';
-  if((def.tags||[]).indexOf('vermin')>=0)return '#6b5a3c';
-  var h=0;for(var i=0;i<id.length;i++)h=(h*31+id.charCodeAt(i))|0;
-  var hues=['#7a5a4a','#6a7248','#5a6a7a','#7a4a5a','#5f5a72','#746249'];
-  return hues[Math.abs(h)%hues.length];
+/* ================= the environment =================
+   Everything above the horizon is authored in WORLD azimuth and elevation and
+   projected with the same tangent-space maths as the walls, so a steeple, a ridge
+   or a bank of cloud is a PLACE you turn toward rather than wallpaper that slides.
+   Nothing here depends on wall-clock time: the renderer paints on demand, and a
+   sky that only shimmers while you move would look broken when you stop. */
+var SKY=null;
+function skyAssets(){
+  if(SKY)return SKY;
+  var TAU=Math.PI*2,r=new Rules.RNG(20240715),i;
+  var stars=[];
+  for(i=0;i<260;i++){
+    var el=Math.pow(r.int(0,1000)/1000,1.5);
+    stars.push({az:r.int(0,6283)/1000,el:el,b:0.18+r.int(0,60)/100,s:r.int(10,26)/10});
+  }
+  // two ridge lines, 720 azimuth samples each: the far hills and the near downs
+  function ridge(a1,a2,f1,f2,ph){
+    var t=[],rr=new Rules.RNG(4000+ph*7);
+    for(var k=0;k<720;k++){
+      var A=k/720*TAU;
+      var v=a1*(0.55+0.45*Math.sin(A*f1+ph))+a2*(0.5+0.5*Math.sin(A*f2+ph*1.7))
+            +0.035*Math.sin(A*f2*3.1+ph*0.6)+rr.int(0,60)/1000*0.35;
+      t.push(v);
+    }
+    return t;
+  }
+  var far=ridge(0.16,0.09,3,7,1.3),near=ridge(0.30,0.15,2,5,4.1);
+  var clouds=[];
+  for(i=0;i<30;i++){
+    clouds.push({az:r.int(0,6283)/1000,el:0.06+Math.pow(r.int(0,1000)/1000,1.7)*0.72,
+      da:(0.05+r.int(0,20)/100)*0.5,h:(0.02+r.int(0,5)/100),a:0.10+r.int(0,24)/100,
+      warm:r.int(0,100)<40});
+  }
+  function puff(top,mid){
+    var c=document.createElement('canvas');c.width=96;c.height=48;
+    var g=c.getContext('2d');
+    var rad=g.createRadialGradient(48,26,2,48,26,44);
+    rad.addColorStop(0,top);rad.addColorStop(0.42,mid);rad.addColorStop(1,'rgba(40,38,62,0)');
+    g.fillStyle=rad;
+    g.beginPath();g.ellipse(48,26,44,20,0,0,6.29);g.fill();
+    g.globalCompositeOperation='source-atop';
+    g.fillStyle='rgba(20,18,34,.20)';g.fillRect(0,32,96,16);
+    return c;
+  }
+  var cool=puff('rgba(226,214,222,.95)','rgba(150,140,170,.42)');
+  var lit=puff('rgba(255,214,164,.95)','rgba(226,140,86,.40)');
+  return SKY={stars:stars,far:far,near:near,clouds:clouds,cool:cool,lit:lit};
 }
-function shade(hex,amt){
-  var n=parseInt(hex.slice(1),16),r=(n>>16)+amt,g=(n>>8&255)+amt,b=(n&255)+amt;
-  return 'rgb('+Math.max(0,Math.min(255,r))+','+Math.max(0,Math.min(255,g))+','+Math.max(0,Math.min(255,b))+')';
-}
-function entitySize(key){
-  var p=key.split(':');
-  if(p[0]==='mon'){var d=(window.MONSTERS&&MONSTERS[p[1]])||{};
-    return d.size==='L'?1.6:(d.size==='S'?0.55:1.0);}
-  if(p[0]==='chest')return 0.45;
-  return 0.8;
+function drawSky(ctx,w2,horizon,ang,fov,atmo){
+  var S=skyAssets(),TAU=Math.PI*2,tanH=Math.tan(fov/2),hw=w2*0.5;
+  atmo=atmo||ATMOS.town;
+  // The air the ground hazes into is the air the horizon has to dissolve into,
+  // or the world stops at its own skyline.
+  function airward(r,g2,b,t){
+    return 'rgb('+((r*(1-t)+atmo.hr*t)|0)+','+((g2*(1-t)+atmo.hg*t)|0)+','+((b*(1-t)+atmo.hb*t)|0)+')';
+  }
+  // sky body: zenith indigo down to a smoke-and-ember horizon
+  var g=ctx.createLinearGradient(0,0,0,horizon);
+  g.addColorStop(0,'#141a38');g.addColorStop(0.42,'#2e2a4e');
+  g.addColorStop(0.74,'#5b3f52');g.addColorStop(0.93,airward(147,84,63,0.42));
+  g.addColorStop(1,airward(184,118,63,0.55));
+  ctx.fillStyle=g;ctx.fillRect(0,0,w2,horizon);
+  function dx(az){                                  // azimuth → screen x, or null if behind
+    var d=az-ang;d=((d%TAU)+TAU*1.5)%TAU-Math.PI;
+    // tan() runs away near the edge of the frustum; a runaway here hands a
+    // non-finite centre to createRadialGradient and takes the whole view down.
+    if(Math.abs(d)>Math.min(fov*0.72,1.30))return null;
+    var t=Math.tan(d);
+    if(!isFinite(t))return null;
+    var x=hw+t/tanH*hw;
+    return isFinite(x)?x:null;
+  }
+  function yOf(el){return horizon-el*horizon*0.94;}
+  // the fire that is going out somewhere in the west, fixed to the world
+  var gx=dx(4.71);
+  if(gx!==null){
+    var rg=ctx.createRadialGradient(gx,horizon,2,gx,horizon,Math.max(120,w2*0.42));
+    rg.addColorStop(0,'rgba(255,158,64,.50)');rg.addColorStop(0.35,'rgba(226,96,48,.22)');
+    rg.addColorStop(1,'rgba(60,30,50,0)');
+    ctx.fillStyle=rg;ctx.fillRect(0,0,w2,horizon+1);
+  }
+  // stars, fading out toward the glow at the horizon
+  for(var i=0;i<S.stars.length;i++){
+    var st=S.stars[i],x=dx(st.az);
+    if(x===null)continue;
+    var a=st.b*Math.min(1,st.el*3.1);
+    if(a<=0.02)continue;
+    ctx.fillStyle='rgba(236,230,214,'+a.toFixed(3)+')';
+    ctx.fillRect(x,yOf(st.el),st.s,st.s);
+  }
+  // a low moon, gibbous, with its own halo
+  var mx=dx(2.30),my=yOf(0.42);
+  if(mx!==null){
+    var mr=Math.max(14,horizon*0.055);
+    var hg=ctx.createRadialGradient(mx,my,mr*0.6,mx,my,mr*5.2);
+    hg.addColorStop(0,'rgba(255,238,206,.30)');hg.addColorStop(1,'rgba(255,220,180,0)');
+    ctx.fillStyle=hg;ctx.fillRect(mx-mr*6,my-mr*6,mr*12,mr*12);
+    ctx.fillStyle='#f2e6c8';ctx.beginPath();ctx.arc(mx,my,mr,0,TAU);ctx.fill();
+    ctx.fillStyle='rgba(190,176,152,.55)';
+    ctx.beginPath();ctx.arc(mx-mr*0.32,my-mr*0.18,mr*0.26,0,TAU);ctx.fill();
+    ctx.beginPath();ctx.arc(mx+mr*0.28,my+mr*0.30,mr*0.18,0,TAU);ctx.fill();
+  }
+  // clouds: width taken from the same projection, so they stretch at the edges
+  ctx.save();ctx.imageSmoothingEnabled=true;
+  for(var k=0;k<S.clouds.length;k++){
+    var c=S.clouds[k],cx2=dx(c.az);
+    if(cx2===null)continue;
+    var x1=dx(c.az-c.da),x2=dx(c.az+c.da);
+    var wpx=(x2!==null&&x1!==null)?Math.abs(x2-x1):c.da*2*hw/tanH*0.5;
+    var hpx=Math.max(6,wpx*c.h*6.5);
+    ctx.globalAlpha=c.a;
+    ctx.drawImage(c.warm?S.lit:S.cool,cx2-wpx*0.5,yOf(c.el)-hpx*0.5,wpx,hpx);
+  }
+  ctx.globalAlpha=1;ctx.restore();
+  // ridgelines, filled from the projected table so they slide as you turn
+  function ridgeLine(tbl,fill,rim){
+    var N=tbl.length;
+    ctx.beginPath();ctx.moveTo(-2,horizon+1);
+    for(var px=-2;px<=w2+2;px+=6){
+      var az=ang+Math.atan((px-hw)/hw*tanH);
+      var f=((az/TAU)%1+1)%1*N,i0=f|0,fr=f-i0;
+      var hh=tbl[i0%N]+(tbl[(i0+1)%N]-tbl[i0%N])*fr;
+      ctx.lineTo(px,horizon-hh*horizon*1.9);
+    }
+    ctx.lineTo(w2+2,horizon+1);ctx.closePath();
+    ctx.fillStyle=fill;ctx.fill();
+    if(rim){ctx.strokeStyle=rim;ctx.lineWidth=1.4;ctx.stroke();}
+  }
+  // aerial perspective on the ranges themselves: the far ridge is further into
+  // the air than the near one, so it is lighter and colder, not just smaller
+  ridgeLine(S.far,airward(43,47,69,0.50),'rgba(255,168,96,.14)');
+  ridgeLine(S.near,airward(27,31,44,0.22),'rgba(255,150,84,.10)');
+  // haze where the world meets the sky, so the ranges sink into the dusk
+  var hz=ctx.createLinearGradient(0,horizon-Math.max(8,horizon*0.10),0,horizon+1);
+  hz.addColorStop(0,'rgba('+atmo.hr+','+atmo.hg+','+atmo.hb+',0)');
+  hz.addColorStop(1,'rgba('+atmo.hr+','+atmo.hg+','+atmo.hb+',.46)');
+  ctx.fillStyle=hz;ctx.fillRect(0,horizon-Math.max(8,horizon*0.10),w2,Math.max(8,horizon*0.10)+1);
 }
 
 /* ================= render ================= */
@@ -340,38 +1305,74 @@ function render(prep,cam,scale,opts){
   if(!ctx)return 0;
   var t0=performance.now();
   scale=scale||1;
-  var w2=Math.max(160,Math.floor(W*scale)),h2=Math.max(100,Math.floor(H*scale));
+  resize();                      // stay glued to the stage and the device
+  animTick++;
+  // A NaN here would take the whole view down, and this file's history says a
+  // stray hoisted variable is the most likely way to get one. Degrade instead.
+  var w2=Math.max(160,Math.floor(W*scale)||160),h2=Math.max(100,Math.floor(H*scale)||100);
   // low-res motion frames paint in a shrunken coordinate space; stretch it
   // over the full canvas backing store so the view never letterboxes.
   ctx.setTransform(W/w2,0,0,H/h2,0,0);
   var horizon=h2/2;
   var outdoor=!!(prep.def.outdoor||prep.def.safe||prep.def.overland);
-  // sky
-  var sky=ctx.createLinearGradient(0,0,0,horizon);
-  if(outdoor){sky.addColorStop(0,'#232a4a');sky.addColorStop(.7,'#4a3a44');sky.addColorStop(1,'#5a4a40');}
-  else{sky.addColorStop(0,'#0b0c11');sky.addColorStop(1,'#171922');}
-  ctx.fillStyle=sky;ctx.fillRect(0,0,w2,horizon);
-  if(outdoor){   // dusk stars and hill silhouettes
-    var rs=new Rules.RNG(prep.w*7+prep.h);
-    ctx.fillStyle='rgba(233,226,207,.7)';
-    for(var st=0;st<26;st++)ctx.fillRect(rs.int(0,w2),rs.int(0,horizon*.55),1.6,1.6);
-    ctx.fillStyle='#1d2430';
-    ctx.beginPath();ctx.moveTo(0,horizon);
-    for(var hx=0;hx<=w2;hx+=w2/9)ctx.lineTo(hx,horizon-10-Math.abs(Math.sin(hx*.013+prep.w))*26);
-    ctx.lineTo(w2,horizon);ctx.closePath();ctx.fill();
-  }
+  var mat=materialFor(prep.def,prep.def.id);
+  var atmo=atmosphereFor(mat,outdoor);
+  // Base fills are the floor of the model: whatever the cast does not reach, and
+  // the fallback when pixel work is unavailable, already carries this air's colour.
+  ctx.fillStyle='rgb('+((atmo.hr*0.30)|0)+','+((atmo.hg*0.30)|0)+','+((atmo.hb*0.32)|0)+')';
+  ctx.fillRect(0,0,w2,horizon);
   var flr=ctx.createLinearGradient(0,horizon,0,h2);
-  if(outdoor){flr.addColorStop(0,'#3a4029');flr.addColorStop(1,'#20241a');}
-  else{flr.addColorStop(0,'#26232a');flr.addColorStop(1,'#101014');}
+  flr.addColorStop(0,'rgb('+((atmo.hr*0.62)|0)+','+((atmo.hg*0.62)|0)+','+((atmo.hb*0.62)|0)+')');
+  flr.addColorStop(1,'rgb('+atmo.sr+','+atmo.sg+','+atmo.sb+')');
   ctx.fillStyle=flr;ctx.fillRect(0,horizon,w2,h2-horizon);
   // camera
   var a0=(cam.ang!==undefined)?cam.ang:[-Math.PI/2,0,Math.PI/2,Math.PI][cam.dir];
   var fov=1.15;
   var cx=cam.x,cy=cam.y;
-  var colw=Math.max(2,(COLW*scale)|0);
+  if(outdoor)drawSky(ctx,w2,horizon,a0,fov,atmo);
+  // A wall slice is a constant *visual* width: one design unit wide, whatever
+  // the device resolution. Motion frames shrink the space, so shrink with it.
+  var colw=Math.max(1,Math.round(Look.slicePx(REC)*scale));
+  var bslice=Math.max(1,Math.round(Look.billPx(REC)*scale));
+  /* The camera can only make sense of a handful of placed lights at once, so keep
+     the nearest few and let the rest wait. Each one is then one small 1/(1+d²f)
+     term per wall column and per lit ground sample — the same response as the
+     camera's own light, just centred somewhere other than here. */
+  /* Placed lights. "The four nearest" is the obvious rule and the wrong one: three
+     torches at your back crowd out the single torch you are looking at, so the
+     feature vanishes exactly when you would notice it. Keep the nearest ones that
+     are actually in front of the camera. */
+  var LGS=[],LALL=prep.lights||[];
+  if(LALL.length&&Look.tierIndex()>0){
+    /* The same camera plane the walls, billboards and light bodies use: f is the
+       view axis and p points to the RIGHT. Flipping this puts the frustum test on
+       the mirrored half of the field. */
+    var fdX=Math.cos(a0),fdY=Math.sin(a0),ltH=Math.tan(fov/2);
+    var rtX=-fdY*ltH,rtY=fdX*ltH;
+    var ldet=1/(rtX*fdY-fdX*rtY);
+    var LCAND=[];
+    for(var li=0;li<LALL.length;li++){
+      var LX=LALL[li],ldx=LX.x-cx,ldy=LX.y-cy,ld2=ldx*ldx+ldy*ldy;
+      var lreach=LX.rad+13;
+      if(ld2>lreach*lreach)continue;
+      var tD=ldet*(-rtY*ldx+rtX*ldy);                // depth along the view axis
+      if(tD<0.25)continue;                           // behind you
+      var tS=ldet*(fdY*ldx-fdX*ldy);                 // across it, positive to the right
+      if(tS<-tD*0.75-1.6||tS>tD*0.75+1.6)continue;   // outside the frustum and the flame's own width
+      LCAND.push({L:LX,d2:ld2});
+    }
+    LCAND.sort(function(a,b){return a.d2-b.d2;});
+    if(LCAND.length>5)LCAND.length=5;
+    LGS=LCAND;
+    for(var lj=0;lj<LGS.length;lj++){LGS[lj].d=Math.sqrt(LGS[lj].d2);LGS[lj].r2=LGS[lj].L.rad*LGS[lj].L.rad;}
+  }
+  var LON=LGS.length>0;
+  var VARON=Look.tierIndex()>0;     // weathered facade variants are a fair-and-above luxury
+  ctx.imageSmoothingEnabled=false;      // crisp masonry, no double-blur per slice
   zN=Math.ceil(w2/colw)+1;
   if(!zbuf||zbuf.length<zN)zbuf=new Float32Array(zN+4);
   for(var i0=0;i0<zN;i0++)zbuf[i0]=99;
+  var DOORS=prep.doorW||null,camTX=cx|0,camTY=cy|0;   // storefronts: solid to the eye
   var ci=-1;
   for(var px=0;px<w2;px+=colw){
     ci++;
@@ -387,7 +1388,12 @@ function render(prep,cam,scale,opts){
     while(!hit&&guard++<64){
       if(sdx<sdy){sdx+=ddx;mapX+=stepX;side=0;}else{sdy+=ddy;mapY+=stepY;side=1;}
       if(mapX<0||mapY<0||mapX>=prep.w||mapY>=prep.h){hit=2;break;}
-      if(prep.wall[mapY*prep.w+mapX]){hit=1;c=prep.char[mapY*prep.w+mapX];}
+      var hi=mapY*prep.w+mapX;
+      if(prep.wall[hi]){hit=1;c=prep.char[hi];}
+      /* A storefront is a face you can walk through but not see through. It stays out of
+         the wall set, because the door opens for anyone, but the eye is stopped by it -
+         and you are the exception once you are standing in the doorway yourself. */
+      else if(DOORS&&DOORS[hi]&&!(mapX===camTX&&mapY===camTY)){hit=1;c='*';}
     }
     if(hit!==1){continue;}
     dist=side===0?(mapX-cx+(1-stepX)/2)/rdx:(mapY-cy+(1-stepY)/2)/rdy;
@@ -397,29 +1403,164 @@ function render(prep,cam,scale,opts){
     if(lh>h2*3)lh=h2*3;
     var y0=(h2-lh)/2;
     // texture column
-    var wallX=side===0?(cy+dist*rdy):(cx+dist*rdx);
-    wallX-=Math.floor(wallX);
-    var tex=texFor(c),texCan=(dist>7&&tex.mip)?tex.mip:tex.full;
+    var wallU=side===0?(cy+dist*rdy):(cx+dist*rdx);
+    var wallX=wallU-Math.floor(wallU);
+    var doorFace=(c==='*');
+    var texMat=mat.wall[c]||c,tex=texFor(texMat);
+    /* The inside of a building's own wall is not a facade. On an outdoor map a face
+       whose far side is roofed bounds a room, and a room has one door for light:
+       plain lime wash, no windows, and kept dim. This is also what makes a doorway
+       legible from the street. With the same bright plaster on both sides, the shop
+       front and the shop's back wall are the same pale wall, and the entrance has
+       no contrast at all - the question becomes "where is the front of the inn?".
+       A dark opening cut into a bright wall answers it without a sign. */
+    var roomFace=0;
+    if(outdoor&&!doorFace){
+      var nbX=mapX,nbY=mapY;                  // the tile the face looks out on
+      if(side===0)nbX+=(stepX>0?-1:1);else nbY+=(stepY>0?-1:1);
+      roomFace=(nbX>=0&&nbY>=0&&nbX<prep.w&&nbY<prep.h)?prep.roof[nbY*prep.w+nbX]:0;
+      if(roomFace&&mat.interior)tex=texFor(mat.interior);
+    }
+    /* Same block, different weathering, and sometimes the other hand. A wall face
+       is identified by its tile and its orientation, so the choice is stable while
+       you look at it and different down the corridor. */
+    var vseed=((mapX*7+mapY*13+(side?5:0))>>>0);
+    var mir=((side===0&&rdx>0)||(side===1&&rdy<0))?1:0;
+    if(VARON&&!doorFace&&tex&&tex.vars&&(vseed&1))tex=variantOf(tex,1+((vseed>>1)&1));
+    var texCan=tex&&tex.chain?pickMip(tex.chain,lh):(tex&&tex.full?tex.full:null);
     var TW=texCan.width,TH=texCan.height;
     var texX=(wallX*TW)|0;
-    if((side===0&&rdx>0)||(side===1&&rdy<0))texX=TW-1-texX;
+    if(mir^((vseed>>3)&1))texX=TW-1-texX;
     if(texCan&&texCan.width>0){
-      try{ctx.drawImage(texCan,texX,0,1,TH,px,y0,colw+1,lh);}
+      try{ctx.drawImage(texCan,texX,0,1,TH,px,y0,colw,lh);}
       catch(e){ctx.fillStyle='#555';ctx.fillRect(px,y0,colw,lh);}
     }else{ctx.fillStyle='#555';ctx.fillRect(px,y0,colw,lh);}
-    if(side===1){ctx.fillStyle='rgba(6,6,12,.34)';ctx.fillRect(px,y0,colw+1,lh);}
-    var fog=Math.min(.86,dist/14);
-    if(fog>.04){ctx.fillStyle='rgba(13,14,20,'+fog.toFixed(3)+')';ctx.fillRect(px,y0,colw+1,lh);}
-    var band=Math.min(12,Math.max(2,lh*.04));
-    ctx.fillStyle='rgba(0,0,0,.34)';ctx.fillRect(px,y0+lh-band,colw+1,band);
-    ctx.fillStyle='rgba(240,230,200,.05)';ctx.fillRect(px,y0,colw+1,Math.min(8,Math.max(1,lh*.02)));
+    // ── the single response: lit toward the surface, airT toward the air ──
+    var lit=1/(1+dist*dist*atmo.k);if(lit<atmo.amb)lit=atmo.amb;
+    var airT=1-lit;
+    var texU=(mir^((vseed>>3)&1))?1-wallX:wallX;
+    var em=tex.emit?tex.emit[Math.min(TEXPX-1,Math.max(0,(texU*TEXPX)|0))]:0;   // lit windows keep their glow
+    if(em>0)airT*=1-em;
+    /* Placed light on this column. The exact hit point is known, so a sconce three
+       steps down the passage brightens the wall beside it and leaves the next one
+       alone — which is what makes a corridor read as a place rather than a tunnel. */
+    var lhit=0;
+    if(LON){
+      var hpar=side===0?(stepX>0?mapX:mapX+1):(stepY>0?mapY:mapY+1);
+      var lhx=side===0?hpar:wallU,lhy=side===0?wallU:hpar;
+      for(var lk=0;lk<LGS.length;lk++){
+        var LG=LGS[lk],lqx=lhx-LG.L.x,lqy=lhy-LG.L.y,lq2=lqx*lqx+lqy*lqy;
+        if(lq2>LG.r2)continue;
+        lhit+=LG.L.i/(1+lq2*LG.L.fl);
+      }
+      /* Same rule as the ground: the lamp fills the light the camera's lost, it does
+         not pile on top of light the surface already has. */
+      var lroom=1.18-lit;
+      if(lhit>lroom)lhit=lroom>0?lroom:0;
+      if(lhit>0.02)airT=Math.max(0,airT-lhit*0.80);   // nearer lamps thin the air in front of them
+    }
+    if(airT>0.015){
+      ctx.fillStyle='rgba('+atmo.hr+','+atmo.hg+','+atmo.hb+','+airT.toFixed(3)+')';
+      ctx.fillRect(px,y0,colw,lh);
+    }
+    if(lit>0.70){                                     // near the lamp the air is warm
+      ctx.fillStyle='rgba(255,190,116,'+((lit-0.70)*0.19).toFixed(3)+')';
+      ctx.fillRect(px,y0,colw,lh);
+    }
+    // Which way the wall faces belongs to the light, not to a fixed 34% of black.
+    if(side===1){ctx.fillStyle='rgba(10,12,20,'+(0.30*lit).toFixed(3)+')';ctx.fillRect(px,y0,colw,lh);}
+    /* A room's own dimness, held back from the distance haze so a far interior does
+       not simply turn into air. */
+    if(roomFace){
+      ctx.fillStyle='rgba(14,11,9,'+(0.40*(0.34+0.66*lit)).toFixed(3)+')';
+      ctx.fillRect(px,y0,colw,lh);
+    }
+    /* Corners, measured rather than assumed. The DDA stopped at a wall; walking on
+       along that face tells us how far it is to the end of the run, so a long facade
+       keeps an even light and only the ground near an actual corner darkens. The old
+       term was a function of the texture coordinate, so every block repeated the same
+       fake corner. */
+    var runA=0,runB=0,rw;
+    if(side===0){
+      for(rw=mapY-1;rw>=0&&runA<9&&prep.wall[rw*prep.w+mapX];rw--)runA++;
+      for(rw=mapY+1;rw<prep.h&&runB<9&&prep.wall[rw*prep.w+mapX];rw++)runB++;
+    }else{
+      for(rw=mapX-1;rw>=0&&runA<9&&prep.wall[mapY*prep.w+rw];rw--)runA++;
+      for(rw=mapX+1;rw<prep.w&&runB<9&&prep.wall[mapY*prep.w+rw];rw++)runB++;
+    }
+    var edge=Math.min(wallX+runA,1-wallX+runB);
+    var cor=edge>=1.45?0:(1-edge/1.45);cor=cor*cor*0.32*(0.32+0.68*lit);
+    if(cor>0.012){ctx.fillStyle='rgba(8,9,16,'+cor.toFixed(3)+')';ctx.fillRect(px,y0,colw,lh);}
+    /* A door is framed in timber. If the room beside this face has a roof, then the
+       wall ends at a doorway on that side, so the shared edge gets an oak jamb and
+       the head of the wall a lintel. The opening you can see into carries the hint
+       when you are close; at a distance, or when the room is dark, the frame is all
+       that says "here, this one is a door". */
+    if(outdoor&&!roomFace&&!doorFace){
+      var dA=0,dB=0;
+      if(side===0){
+        if(mapY>0)dA=prep.roof[(mapY-1)*prep.w+mapX];
+        if(mapY<prep.h-1)dB=prep.roof[(mapY+1)*prep.w+mapX];
+      }else{
+        if(mapX>0)dA=prep.roof[mapY*prep.w+mapX-1];
+        if(mapX<prep.w-1)dB=prep.roof[mapY*prep.w+mapX+1];
+      }
+      var jamb=0,t2;
+      if(dA)jamb=1-wallX/0.17;
+      if(dB){t2=1-(1-wallX)/0.17;if(t2>jamb)jamb=t2;}
+      jamb=jamb<0?0:(jamb>1?1:jamb);
+      if(jamb>0.01){
+        ctx.fillStyle='rgba(34,21,13,'+(jamb*(0.30+0.34*lit)).toFixed(3)+')';
+        ctx.fillRect(px,y0,colw,lh);
+      }
+      if(dA||dB){
+        ctx.fillStyle='rgba(30,19,12,'+(0.22+0.30*lit).toFixed(3)+')';
+        ctx.fillRect(px,y0,colw,Math.max(2,lh*0.11));
+      }
+    }
+    if(lhit>0.02){                            // the lamp's own warmth, capped so it never bleaches
+      ctx.fillStyle='rgba(255,186,112,'+Math.min(0.46,lhit*0.34).toFixed(3)+')';
+      ctx.fillRect(px,y0,colw,lh);
+    }
+    // Contact ambient occlusion, graded and tinted instead of one black bar, with
+    // a warm rim where the wall meets the roof so the join stays readable.
+    var ao=Math.min(30,Math.max(3,lh*0.085));
+    ctx.fillStyle='rgba(8,9,16,'+(0.10+0.26*lit*(1-em)).toFixed(3)+')';
+    ctx.fillRect(px,y0+lh-ao,colw,ao);
+    ctx.fillStyle='rgba(8,9,16,'+(0.05+0.14*lit*(1-em)).toFixed(3)+')';
+    ctx.fillRect(px,y0+lh-ao*2.5,colw,ao*1.5);
+    ctx.fillStyle='rgba(255,214,166,'+(0.055*lit+0.012).toFixed(3)+')';
+    ctx.fillRect(px,y0,colw,Math.min(9,Math.max(1,lh*0.022)));
   }
-  /* ---------- cast-textured ground ---------- */
+  /* ---------- cast-textured ground, and roof ---------- */
   var groundTexs=FLOORFAIL?null:groundTextures();
   if(!FLOORFAIL&&(!groundTexs['.']||!groundTexs['.'].data))FLOORFAIL=1;
   var dirX0=Math.cos(a0),dirY0=Math.sin(a0),tanH0=Math.tan(fov/2);
   var plX=-dirY0*tanH0,plY=dirX0*tanH0;
-  var FH=Math.max(1,Math.ceil((h2-horizon)/2)),FW=Math.max(1,Math.ceil(w2/2));
+  // The roof is the mirror of the floor at the same distances, so it rides the
+  // same cast: one pass, one budget, and the ceiling belongs to the same
+  // building as the walls. Outdoors the sky owns the upper half instead.
+  var ceilKey=mat.ceil||(outdoor?null:'vault');
+  var ceilTex=null;
+  if(ceilKey&&!FLOORFAIL){
+    var ct=ceilTextures()[ceilKey]||ceilTextures().vault;
+    if(ct&&ct.chain&&ct.chain[0]&&ct.chain[0].d)ceilTex=ct;
+  }
+  var yTop=ceilTex?0:horizon;
+  /* A roof plane seen from the street is a soffit in shadow, not a slab of
+     daylight: from the lane, the far side of a building shows its own ceiling
+     above the wall head, and left at full sky brightness it reads as a pale
+     sheet floating over the lane. Seen while standing under it, the same plane
+     is a room's ceiling and takes full light. */
+  var camRoof=prep.roof[(cy|0)*prep.w+(cx|0)]?1:0;
+  var ceilDim=camRoof?1:0.42;
+  var vspan=h2-yTop;
+  // Casting costs one texel per sample; budget the samples and let the step
+  // factors follow, so big canvases don't pay quadratically.
+  var fsc=Math.min(.5,Math.sqrt(Look.floorBudget()/Math.max(1,w2*vspan)));
+  fsc=Math.max(.14,fsc);
+  var FH=Math.max(1,Math.ceil(vspan*fsc)),FW=Math.max(1,Math.ceil(w2*fsc));
+  var fstepX=w2/FW,fstepY=vspan/FH;
   if(!FBUF||FBUF.W!==FW||FBUF.H!==FH){
     FBUF={W:FW,H:FH,can:document.createElement('canvas')};
     FBUF.can.width=FW;FBUF.can.height=FH;FBUF.ctx=FBUF.can.getContext('2d');
@@ -428,50 +1569,193 @@ function render(prep,cam,scale,opts){
   if(!FBUF||!FBUF.img||!FBUF.img.data){FLOORFAIL=1;FBUF=null;}
   var fpx=FBUF&&!FLOORFAIL?FBUF.img.data:null;
   if(FBUF&&fpx){
-  var fogR=outdoor?36:16,fogG=outdoor?40:17,fogB=outdoor?32:22;
+  var airR=atmo.hr,airG=atmo.hg,airB=atmo.hb;               // one air, both surfaces
+  /* World step per buffer sample. The row spans the camera plane exactly once:
+     its left edge is (f - p) and its right edge must be (f + p), so crossing the
+     full width w2 advances two plane widths. A sample is fstepX pixels of that.
+     The factor of two that used to live here made the row span f-p .. f+3p, which
+     sheared the entire ground half a field to the right: walking forward streamed
+     the floor sideways instead of under you. */
+  var stepW=fstepX/w2;   // camera derivative × fstepX
+  /* The buffer is composited over the wall pass, so a pixel it leaves untouched
+     shows the wall behind it. Ground that sits behind a wall is hidden by that
+     wall and must not be painted at all: filling those pixels with "shade" is
+     what used to drag a black slab across every wall in the game. */
+  fpx.fill(0);
   for(var fy=0;fy<FH;fy++){
-    var sy=horizon+fy*2+1.5;
-    var rowD=(h2*0.9)/(2*(sy-horizon));
-    if(rowD>26)continue;
-    var fog=Math.min(.9,rowD/15);
-    var stepW=4/w2;
+    var sy=yTop+fy*fstepY+fstepY*0.75;
+    var dy=sy-horizon;
+    var upSide=dy<0;
+    var ady=upSide?-dy:dy;
+    var rowBase=fy*FW*4;
+    var rowD=(h2*0.9)/(2*Math.max(0.35,ady));
+    // One light level per row — distance is constant along a row, so the whole
+    // lighting response costs nothing per pixel. The roof reads the same curve
+    // scaled by atmo.roof: it sits above the light, so it hazes out sooner.
+    var lit=1/(1+rowD*rowD*atmo.k);if(lit<atmo.amb)lit=atmo.amb;
+    var lR=lit,lG=lit*(0.80+0.20*lit),lB=lit*(0.58+0.42*lit);
+    var litc=lit*atmo.roof,lRc=litc,lGc=litc*(0.80+0.20*litc),lBc=litc*(0.58+0.42*litc);
+    var airT=1-lit,airTc=1-litc;
+    var hzR=airR*airT,hzG=airG*airT,hzB=airB*airT;
+    var hzRc=airR*airTc*ceilDim,hzGc=airG*airTc*ceilDim,hzBc=airB*airTc*ceilDim;
+    // one ground tile covers this depth in screen px — drives the mip choice
+    var pxTile=(h2*0.45)/(rowD*(rowD+1));
+    if(rowD>26){continue;}   // past the cast: the base gradient already carries this air
     var wxL=cx+(dirX0-plX)*rowD,wyL=cy+(dirY0-plY)*rowD;
     var dwx=(plX*2)*rowD*stepW,dwy=(plY*2)*rowD*stepW;
-    var rowBase=fy*FW*4;
     for(var fx=0;fx<FW;fx++){
-      var bx=fx*2;
+      var bx=fx*fstepX;
       var zci=Math.floor(bx/colw);
       var za=rowBase+(fx<<2);
-      if(zbuf[zci]!==undefined&&rowD>=zbuf[zci]-0.02){
-        // ground behind a wall: deep shade at the contact line, thinning to haze
-        var sh=Math.exp(-(rowD-zbuf[zci])*0.7);                  // 1 at the wall, ->0 beyond
-        var shR=26+ (fogR-10)*(1-sh), shG=25+(fogG-10)*(1-sh), shB=23+(fogB-10)*(1-sh);
-        fpx[za]=shR; fpx[za+1]=shG; fpx[za+2]=shB; fpx[za+3]=255;
-        continue;
+      var zwall=zbuf[zci];
+      if(zwall!==undefined&&rowD>=zwall-0.02){
+        /* Hidden behind a wall. The wall's slice covers every row from its head down,
+           so the only ground pixel a wall cannot account for is one above that head -
+           and above the head of a wall, seen from under a roof, is the ceiling behind
+           it. Leaving those pixels transparent is what put a slit of night over the
+           shop's own back wall. */
+        if(!(upSide&&camRoof))continue;
+        /* The ground buffer is sampled coarsely and stretched, so one cell covers many
+           wall columns and a single column's head cannot decide it: a cell that spans a
+           near wall and a far one gets left as a window onto the night. Ask every column
+           the cell covers, and paint if any of them has open air above its head. */
+        var headMax=-1,cc,cmax=Math.min(zN,Math.floor((bx+fstepX)/colw)+1);
+        for(cc=Math.floor(bx/colw);cc<cmax;cc++){
+          var cz=zbuf[cc];if(cz===undefined||cz>=90)continue;
+          var chy=(h2-h2*0.9/cz)*0.5;
+          if(chy>headMax)headMax=chy;
+        }
+        if(headMax<0||sy>headMax+fstepY)continue;     // every wall here reaches this row
+        roofed=1;gx=cx|0;gy=cy|0;ch=prep.char[(cy|0)*prep.w+(cx|0)];
+        u=(u%1+1)%1;v=(v%1+1)%1;
       }
       var wx=wxL+dwx*fx,wy=wyL+dwy*fx;
       var gx=Math.floor(wx),gy=Math.floor(wy);
       var ch=(gx>=0&&gy>=0&&gx<prep.w&&gy<prep.h)?prep.char[gy*prep.w+gx]:'?';
-      var texG=groundTexs[ch]||groundTexs['?'];
-      if(!texG)continue;
       var u=(wx-Math.floor(wx)),v=(wy-Math.floor(wy));
-      var tx=(u*texG.width)|0,ty=((1-v)*texG.height)|0;   // texture up = away
-      var td=texG.data,ti=((ty*texG.width+tx)<<2);
-      var a=rowBase+(fx<<2);
-      var mixf=fog;
-      fpx[a]  =td[ti]  *(1-mixf)+fogR*mixf;
-      fpx[a+1]=td[ti+1]*(1-mixf)+fogG*mixf;
-      fpx[a+2]=td[ti+2]*(1-mixf)+fogB*mixf;
+      var roofed=(gx>=0&&gy>=0&&gx<prep.w&&gy<prep.h)?prep.roof[gy*prep.w+gx]:0;
+      var a=za,src,mr2,mg2,mb2;
+      if(upSide){
+        /* No roof here: leave the pixel untouched. The ground buffer starts
+           transparent, so the sky that was drawn under it survives, and a street
+           stays open while the shop next door is closed over. */
+        var fedge=0;
+        if(!roofed){
+          /* Steeply upward, the sample steps out through the wall itself before it
+             can describe the roof, so the answer comes back "sky" and a wedge of
+             night sits at the top of every room you stand inside. The roof does run
+             to the wall's inner face: sample a little nearer along the ray, and if
+             that ground lies under a roof, the roof reaches here. */
+          var bk=0.30/Math.max(1e-3,rowD);
+          var qx=wx-(wx-cx)*bk,qy=wy-(wy-cy)*bk;
+          var qgx=Math.floor(qx),qgy=Math.floor(qy);
+          if(qgx>=0&&qgy>=0&&qgx<prep.w&&qgy<prep.h&&prep.roof[qgy*prep.w+qgx]){
+            roofed=1;gx=qgx;gy=qgy;ch=prep.char[qgy*prep.w+qgx];
+            u=qx-qgx;v=qy-qgy;fedge=1;
+          }else if(camRoof){
+            /* Nothing nearer is under a roof either. Past a tile the air often is open -
+               but only along a line that gets there without crossing masonry. Standing
+               under a roof you cannot see the sky through the building's own wall, so if
+               the run to this sample is stopped by a wall, the pixel is ceiling. The test
+               is deliberately a short march: it costs nothing for the open cone of a
+               doorway, which is the only place indoors that the sky is allowed. */
+            var cwx=wx-cx,cwy=wy-cy,cl=Math.sqrt(cwx*cwx+cwy*cwy),occ=false;
+            for(var cstep=0.3;cstep<cl;cstep+=0.3){
+              var kgx=(cx+cwx*cstep/cl)|0,kgy=(cy+cwy*cstep/cl)|0;
+              if(kgx<0||kgy<0||kgx>=prep.w||kgy>=prep.h)break;
+              if(prep.wall[kgy*prep.w+kgx]){occ=true;break;}
+            }
+            if(!occ)continue;
+            roofed=1;gx=cx|0;gy=cy|0;ch=prep.char[(cy|0)*prep.w+(cx|0)];
+            u=(u%1+1)%1;v=(v%1+1)%1;
+          }else continue;
+        }
+        /* The leading edge of a roof seen from the lane is a fascia board, not an
+           infinite plane: the first band of ceiling you see over a wall head is
+           edge-on and in its own shadow, which is the difference between a floating
+           sheet and the eaves of a building. */
+        var fascia=fedge;
+        if(!camRoof&&!fedge){
+          var fax=gx,fay=gy,fdx=wx-cx,fdy=wy-cy;
+          if(Math.abs(fdx)>=Math.abs(fdy)){if(fdx>0)fax--;else fax++;}
+          else{if(fdy>0)fay--;else fay++;}
+          fascia=((fax>=0&&fay>=0&&fax<prep.w&&fay<prep.h)?prep.roof[fay*prep.w+fax]:1)?0:1;
+        }
+        var fdim=fascia?0.40:1;
+        src=groundSample(ceilTex,u,v,pxTile);
+        mr2=lRc*ceilDim*fdim;mg2=lGc*ceilDim*fdim;mb2=lBc*ceilDim*fdim;
+      }else{
+        // Indoors, every walkable character that is not a named outdoor surface
+        // (door, chest cell, stairs, rubble) wears the building's own floor —
+        // otherwise a lone event tile in a crypt shows up as village flagstone.
+        var OPENG=ch===','||ch==='='||ch==='+'||ch==='T'||ch==='n'||ch==='%'||ch==='~';
+        var laid=mat.floor&&!OPENG&&ch!=='?'&&(roofed||!outdoor);
+        var fk=laid?mat.floor['.']:ch;
+        var texG=groundTexs[fk]||groundTexs[ch]||groundTexs['?'];
+        if(!texG){fpx[a]=hzR;fpx[a+1]=hzG;fpx[a+2]=hzB;fpx[a+3]=255;continue;}
+        src=groundSample(texG,u,v,pxTile);
+        mr2=lR;mg2=lG;mb2=lB;
+      }
+      if(!src){
+        fpx[a]=upSide?hzRc:hzR;fpx[a+1]=upSide?hzGc:hzG;fpx[a+2]=upSide?hzBc:hzB;
+        fpx[a+3]=255;continue;
+      }
+      // Contact shadow: the ground approaching a wall receives less of the room.
+      // Folded into the light terms, so the common sample costs no extra work.
+      if(zwall!==undefined){
+        var gap=zwall-rowD;
+        if(gap<1.7){
+          var cs=0.40+0.60*(gap/1.7);
+          mr2*=cs;mg2*=cs;mb2*=cs;
+        }
+      }
+      /* Pooled light on the ground. The row's distance is known, and by the triangle
+         inequality a lamp further from the camera than this row plus its reach cannot
+         touch it — so the common case costs one subtraction, not a light loop. Where a
+         lamp does reach, its warm term joins the light multipliers and its share of
+         the haze steps back, which is what makes a bright pool around a brazier. */
+      var fzm=fascia?0.45:1;
+      var hzr=upSide?hzRc*fzm:hzR,hzg=upSide?hzGc*fzm:hzG,hzb=upSide?hzBc*fzm:hzB;
+      if(LON){
+        var lam=0,lk2;
+        for(lk2=0;lk2<LGS.length;lk2++){
+          var LG2=LGS[lk2];
+          if(LG2.d-rowD>LG2.L.rad)continue;
+          var pux=wx-LG2.L.x,puy=wy-LG2.L.y,pu2=pux*pux+puy*puy;
+          if(pu2>LG2.r2)continue;
+          lam+=LG2.L.i/(1+pu2*LG2.L.fl);
+        }
+        if(upSide)lam*=0.45;
+        if(lam>0.004){
+          /* A lamp only adds what the camera's own light has left unclaimed. Under
+             your feet the lamp is already at full so a torch there changes nothing;
+             three passages away, where the camera light has died, the same torch
+             takes over. Adding outright instead of filling spare room is what turned
+             village grass into lime. */
+          var room=1.18-lit;
+          if(lam>room)lam=room>0?room:0;
+          if(lam>0.004){
+            mr2+=lam*1.06;mg2+=lam*0.70;mb2+=lam*0.32;
+            var hdm=1-Math.min(0.86,lam*0.80);
+            hzr*=hdm;hzg*=hdm;hzb*=hdm;
+          }
+        }
+      }
+      // same arithmetic cost as the old two-term fog mix: three multiplies, three adds
+      fpx[a]  =src[0]*mr2+hzr;
+      fpx[a+1]=src[1]*mg2+hzg;
+      fpx[a+2]=src[2]*mb2+hzb;
       fpx[a+3]=255;
     }
   }
   FBUF.ctx.putImageData(FBUF.img,0,0);
   ctx.save();ctx.imageSmoothingEnabled=false;
-  ctx.drawImage(FBUF.can,0,horizon,w2,h2-horizon);
+  ctx.drawImage(FBUF.can,0,yTop,w2,vspan);
   ctx.restore();}
 
-  // billboards, far to near
+  // billboards, far to near. Goods belong to the map, not to the party.
   var ents=(opts&&opts.entities)||[];
+  if(prep.props&&prep.props.length)ents=ents.concat(prep.props);
   if(ents.length){
     var dirX=Math.cos(a0),dirY=Math.sin(a0),tanH=Math.tan(fov/2);
     var planeX=-dirY*tanH,planeY=dirX*tanH;
@@ -483,8 +1767,9 @@ function render(prep,cam,scale,opts){
     }).filter(function(e){return e.tY>0.2&&Math.abs(e.tX/e.tY)<3.2;})
       .sort(function(a,b){return b.tY-a.tY;});
     list.forEach(function(e){
-      var en=e.en,spr=sprite(en.spr);
-      if(!spr||!spr.width)return;
+      var en=e.en,frames=sprite(en.spr);
+      if(!frames||!frames.length)return;
+      var spr=poseOf(frames,en);
       var sx=(w2/2)*(1+e.tX/e.tY);
       var lh=h2*0.9/e.tY;
       var hs=en.hs||entitySize(en.spr);
@@ -497,11 +1782,11 @@ function render(prep,cam,scale,opts){
       var fade=1-Math.min(.9,e.tY/14);
       ctx.globalAlpha=Math.max(.08,fade);
       var TW2=spr.width,TH2=spr.height;
-      for(var xx=x0;xx<x1;xx+=colw){
-        var idx=Math.floor(xx/colw);
+      for(var xx=x0;xx<x1;xx+=bslice){
+        var idx=Math.floor(xx/colw);              // the depth buffer is wall-sliced
         if(zbuf[idx]!==undefined&&zbuf[idx]<=e.tY+.12)continue;   // occluded by wall
         var u=(xx-(sx-swp/2))/swp;
-        try{ctx.drawImage(spr,Math.min(TW2-1,(u*TW2)|0),0,Math.max(1,(colw/swp*TW2)|0),TH2,xx,top,colw+1,shp);}
+        try{ctx.drawImage(spr,Math.min(TW2-1,(u*TW2)|0),0,Math.max(1,(bslice/swp*TW2)|0),TH2,xx,top,bslice,shp);}
         catch(e2){}
       }
       if(en.tag&&x0<sx&&sx<x1&&!(zbuf[Math.floor(sx/colw)]<=e.tY+.12)){
@@ -510,6 +1795,54 @@ function render(prep,cam,scale,opts){
       }
       ctx.globalAlpha=1;
     });
+  }
+  /* ---- the sources themselves ----
+     A light that illuminates a room but has no body in it looks like a camera bug.
+     Each light gets a bracket or a brazier, a flame, and a glow that occupies the air
+     it is lighting. Nothing here flickers: the scene repaints on demand, and a flame
+     that only moves while you move would look broken the moment you stop. */
+  if(LON){
+    var ldirX=Math.cos(a0),ldirY=Math.sin(a0),ltanH=Math.tan(fov/2);
+    var lplX=-ldirY*ltanH,lplY=ldirX*ltanH;
+    var ldet=1/(lplX*ldirY-ldirX*lplY);
+    for(var lm=0;lm<LGS.length;lm++){
+      var LT=LGS[lm].L,ldx2=LT.x-cx,ldy2=LT.y-cy;
+      var ltX=ldet*(ldirY*ldx2-ldirX*ldy2),ltY=ldet*(-lplY*ldx2+lplX*ldy2);
+      /* A torch you are standing inside has no readable shape: at half a unit the
+         projection puts a screen-high flame above your eye line, in the ceiling.
+         Below arm's length it is only a smear of light on the walls, which the
+         lighting pass already paints, so the body is skipped. */
+      if(ltY<0.85||Math.abs(ltX/ltY)>3.0)continue;
+      var lsx=(w2/2)*(1+ltX/ltY);
+      var llh=h2*0.9/ltY,lbot=horizon+llh/2;
+      var lzi=Math.max(0,Math.min(zN-1,Math.floor(lsx/colw)));
+      if(zbuf[lzi]!==undefined&&zbuf[lzi]<ltY-0.22)continue;      // around a corner, out of sight
+      var lhy=LT.floor?lbot-llh*0.17:lbot-llh*0.62;
+      var lfr=Math.max(1.6,llh*0.020);
+      /* The halo is a glow, not a disc of fire: left unclamped it grows past the
+         frame at close range and flattens the whole view to orange. */
+      var lrad=Math.min(h2*0.30,Math.max(7,llh*0.26));
+      var lgr=ctx.createRadialGradient(lsx,lhy,0,lsx,lhy,lrad);
+      lgr.addColorStop(0,'rgba(255,206,136,.55)');
+      lgr.addColorStop(0.34,'rgba(236,140,60,.20)');
+      lgr.addColorStop(1,'rgba(168,84,26,0)');
+      ctx.fillStyle=lgr;
+      ctx.beginPath();ctx.arc(lsx,lhy,lrad,0,6.29);ctx.fill();
+      if(LT.floor){                                   // brazier: three legs and a bowl
+        ctx.fillStyle='#20180f';
+        ctx.fillRect(lsx-lfr*2.0,lhy+lfr*1.2,lfr*4.0,lfr*1.5);
+        ctx.fillStyle='#3a2c18';
+        ctx.beginPath();ctx.ellipse(lsx,lhy+lfr*1.0,lfr*2.3,lfr*0.9,0,0,6.29);ctx.fill();
+      }else{                                          // sconce: an iron bracket off the wall
+        ctx.fillStyle='#241b12';
+        ctx.fillRect(lsx-lfr*0.55,lhy+lfr*0.8,lfr*1.1,lfr*2.4);
+        ctx.fillRect(lsx-lfr*1.6,lhy+lfr*1.5,lfr*3.2,lfr*0.6);
+      }
+      ctx.fillStyle='rgba(255,146,48,.92)';
+      ctx.beginPath();ctx.ellipse(lsx,lhy-lfr*0.5,lfr*0.95,lfr*1.8,0,0,6.29);ctx.fill();
+      ctx.fillStyle='rgba(255,232,182,.95)';
+      ctx.beginPath();ctx.ellipse(lsx,lhy,lfr*0.45,lfr*0.95,0,0,6.29);ctx.fill();
+    }
   }
   ctx.setTransform(1,0,0,1,0,0);   // restore identity for other painters
   lastMs=performance.now()-t0;
@@ -572,6 +1905,6 @@ function minimap(prep,seen,camX,camY,dir,opts){
 
 function figTex(desc,key){return sprite(key);}   // billboard cache handle
 
-return{init:init,prepare:prepare,render:render,minimap:minimap,figTex:figTex,
-  lastFrameMs:lastFrameMs,COLW:COLW};
+return{init:init,resize:resize,prepare:prepare,render:render,minimap:minimap,
+  figTex:figTex,lastFrameMs:lastFrameMs,fit:function(){return REC;}};
 })();

@@ -6,6 +6,7 @@
 'use strict';
 var Combat=(function(){
 var CB=null,cv=null,ctx=null,blink=0;
+var REC=null,CW=1280,CH=800,K=1,TOP=92;
 var W=14,H=10,TW=84,TH=42;
 var BLUNT={club:1,mace:1,flail:1,warhammer:1,hammer:1,morningstar:1,quarterstaff:1,staff:1};
 
@@ -16,7 +17,7 @@ function el(id){return document.getElementById(id);}
 function start(spec){
   if(CB&&!CB.done){UI.toast('A battle is already underway.');return;}
   CB=null;   // a finished board never blocks the next battle
-  cv=el('combatCanvas');ctx=cv.getContext('2d');
+  cv=el('combatCanvas');ctx=cv.getContext('2d');fitBoard();
   var indoor=!(MAPS[G.map]&&MAPS[G.map].overland);
   var obstacles=indoor?[{x:6,y:2},{x:7,y:2},{x:6,y:7},{x:7,y:7}]:seedRocks();
   var mons=[];
@@ -328,6 +329,9 @@ function buildCommands(u){
   function cmd(label,fn,dis,title){
     var b=document.createElement('button');
     cidx++;
+    /* A battle command carries a word, not an icon, so it has to be allowed to take
+       its own width. Fixed 44px squares made 'Backstab' collide with its neighbours. */
+    b.className='lab';
     b.innerHTML='<b class=kbd>'+cidx+'</b>'+label;
     b.setAttribute('data-key',cidx);
     b.setAttribute('aria-label',label.replace(/^[^ ]+ /,'')+' (key '+cidx+')');
@@ -850,19 +854,158 @@ function drawFX(){
   FX=keep;
 }
 
-function isoX(x,y){return cv.width/2+(x-y)*TW/2;}
-function isoY(x,y){return 92+(x+y)*TH/2;}
+/* The board is laid out in DESIGN UNITS (800 tall) and scaled to the device by
+ * one transform, so tile geometry, picking and the reference tile size
+ * (half-width 36 / half-height 18, drawn here at 42/21 for a 1280-wide stage)
+ * stay correct at any canvas size. */
+function isoX(x,y){return CW/2+(x-y)*TW/2;}
+function isoY(x,y){return TOP+(x+y)*TH/2;}
 function unIso(px,py){
-  var dx=(px-cv.width/2)/(TW/2),dy=(py-92)/(TH/2);
+  var dx=(px-CW/2)/(TW/2),dy=(py-TOP)/(TH/2);
   return{x:Math.floor((dy+dx)/2),y:Math.floor((dy-dx)/2)};
+}
+/* Fit the battle canvas and centre the 14×10 board in the design space. */
+function fitBoard(){
+  REC=Look.fit(cv)||REC;
+  if(!REC)return;
+  CW=REC.w;CH=REC.h;K=REC.k;
+  /* The board spans (W+H) diamonds diagonally: (W+H)*TW/2 wide and
+   * (W+H)*TH/4 tall with TH=TW/2. Fit both against the stage, capped at the
+   * reference 84×42 diamond, then centre it below the banner. */
+  var span=W+H;
+  TW=Math.floor(Math.min(84,2*(CW-120)/span,4*(CH-190)/span));
+  TW=Math.max(26,TW);TH=Math.round(TW/2);
+  TOP=Math.max(64,Math.round(56+(CH-56-span*TH/2)*0.42));
+}
+/* ---- what the fight is standing on --------------------------------------
+   A cellar ambush and a barrow ambush and a roadside ambush used to be the same
+   two-tone checkerboard with the same grey crate for an obstacle. The board now
+   asks the same question the raycaster asks — what kind of place is this? — and
+   paints the flagstones, slabs, packed earth, cobbles or grass that match, with
+   obstacles that belong there: kegs in the brewery, slabs under the barrow, props
+   in the mine, carts on the road, boulders in the open. */
+var BOARDMAT={
+  dungeon:{a:'#23283a',b:'#1e2230',grout:'rgba(227,181,74,0.06)',bg0:'#141620',bg1:'#08090d',
+           obst:'#2a2f42',det:'crack',warm:'rgba(226,166,88,.055)',shadow:'rgba(4,5,10,.5)'},
+  cellar:{a:'#332718',b:'#2a2013',grout:'rgba(148,104,58,.16)',bg0:'#1a1309',bg1:'#0a0805',
+           obst:'#4c3a20',det:'plank',warm:'rgba(236,166,78,.075)',shadow:'rgba(6,4,2,.5)'},
+  crypt:{a:'#2c2b35',b:'#242329',grout:'rgba(186,182,208,.10)',bg0:'#15141c',bg1:'#07070b',
+           obst:'#3b3a49',det:'slab',warm:'rgba(196,196,226,.045)',shadow:'rgba(3,3,8,.55)'},
+  mine:{a:'#2b2b23',b:'#232420',grout:'rgba(150,164,150,.09)',bg0:'#141511',bg1:'#07080a',
+           obst:'#3e3b2c',det:'rubble',warm:'rgba(150,200,178,.05)',shadow:'rgba(3,5,5,.55)'},
+  keep:{a:'#34312a',b:'#2b2823',grout:'rgba(226,206,166,.10)',bg0:'#191712',bg1:'#0a0908',
+           obst:'#4d4536',det:'flag',warm:'rgba(236,200,140,.06)',shadow:'rgba(5,4,3,.5)'},
+  town:{a:'#303228',b:'#282a22',grout:'rgba(216,196,146,.09)',bg0:'#171812',bg1:'#090a07',
+           obst:'#4b4330',det:'cobbles',warm:'rgba(232,196,126,.07)',shadow:'rgba(4,4,3,.45)'},
+  wild:{a:'#2c3624',b:'#242d1f',grout:'rgba(166,196,136,.08)',bg0:'#151a11',bg1:'#070906',
+           obst:'#3b4730',det:'tufts',warm:'rgba(190,206,146,.05)',shadow:'rgba(3,5,3,.45)'}
+};
+function boardTheme(){
+  var spec=(CB&&CB.spec)||{};
+  if(spec.theme&&BOARDMAT[spec.theme])return spec.theme;
+  var id=(typeof G!=='undefined'&&G&&G.map)||'';
+  var def=(typeof MAPS!=='undefined'&&MAPS&&MAPS[id])||{};
+  var hay=String(id)+' '+(def.name||'')+' '+(def.locName||'')+' '+(spec.title||'');
+  hay=hay.toLowerCase();
+  if(/cellar|brewery|sewer|cistern|vault/.test(hay))return 'cellar';
+  if(/crypt|tomb|barrow|ossuar|charnel|catacomb|fell|kurgan/.test(hay))return 'crypt';
+  if(/mine|tunnel|quarry|cave|delve|warren|underwork|shaft/.test(hay))return 'mine';
+  if(/keep|hold|citadel|tower|castle|bastion|redoubt/.test(hay))return 'keep';
+  if(/hall|longhouse|barrack|yard|inn|tavern|market|street|lane|square|gate|bridge|town|village|thornwick/.test(hay))return 'town';
+  if(def.overland||/wood|wood|vale|moor|fen|road|field|hollow|grove|pass|meadow/.test(hay))return 'wild';
+  return 'dungeon';
+}
+function boardMat(){return BOARDMAT[boardTheme()]||BOARDMAT.dungeon;}
+function boardHash(x,y){var h=(x*73856093)^(y*19349663);return (h>>>0);}
+/* One small weathering mark per tile, chosen deterministically so the board does
+   not shimmer between repaints. */
+function boardDetail(g,px,py,x,y,BM){
+  var h=boardHash(x,y),r=h%97,tw=TW,th=TH;
+  if(BM.det==='plank'){
+    g.strokeStyle='rgba(18,12,6,.42)';g.lineWidth=1;
+    g.beginPath();g.moveTo(px-tw*0.25,py+th*(0.16*((h>>3)%3)-0.16));
+    g.lineTo(px+tw*0.25,py+th*(0.16*((h>>5)%3)-0.16));g.stroke();
+  }else if(BM.det==='slab'||BM.det==='flag'){
+    g.strokeStyle='rgba(12,12,18,.45)';g.lineWidth=1;
+    g.beginPath();g.moveTo(px-tw*0.34,py);g.lineTo(px+tw*0.34,py);g.stroke();
+    if(r>62){g.fillStyle='rgba(190,186,206,.06)';g.fillRect(px-tw*0.16,py-th*0.12,tw*0.3,th*0.1);}
+  }else if(BM.det==='cobbles'){
+    g.fillStyle='rgba(12,12,10,.30)';
+    for(var k=0;k<3;k++)g.fillRect(px-tw*0.22+k*tw*0.16,py-th*0.10+((k+h)%2)*th*0.14,tw*0.10,th*0.10);
+  }else if(BM.det==='rubble'){
+    g.fillStyle='rgba(10,12,10,.42)';
+    g.beginPath();g.ellipse(px-tw*0.14+(h%9),py+th*0.10,2.2,1.5,0,0,6.29);g.fill();
+    g.fillStyle='rgba(150,164,150,.07)';
+    g.beginPath();g.ellipse(px+tw*0.16,py-th*0.12,3.2,1.6,0,0,6.29);g.fill();
+  }else if(BM.det==='tufts'){
+    g.strokeStyle=r>48?'rgba(150,190,110,.20)':'rgba(20,28,14,.42)';g.lineWidth=1.1;
+    g.beginPath();
+    for(var q=0;q<2;q++){var gx=px-tw*0.18+q*tw*0.3+((h>>2)%5);
+      g.moveTo(gx,py+th*0.12);g.lineTo(gx+1.6,py+th*0.12-4.4);}
+    g.stroke();
+  }else if(BM.det==='crack'){
+    if(r>52){g.strokeStyle='rgba(6,7,12,.5)';g.lineWidth=1;
+      g.beginPath();g.moveTo(px-tw*0.2,py+th*0.1);g.lineTo(px-tw*0.02,py-th*0.04);g.lineTo(px+tw*0.16,py+th*0.06);g.stroke();}
+  }else{
+    g.fillStyle='rgba(200,190,160,.05)';g.fillRect(px-tw*0.1,py-th*0.06,tw*0.2,th*0.06);
+  }
+}
+/* Obstacles are the furniture of the room, not a grey brick. Takes its own
+   context: the board's `g` lives in draw()'s scope, and reaching for it from a
+   module-level helper is a ReferenceError the moment an obstacle is drawn. */
+function drawObstacle(g,px,py,BM){
+  var kind=BM.det;
+  if(kind==='plank'||kind==='cobbles'||kind==='flag'||kind==='crack'){
+    // keg
+    g.fillStyle='#0d0a06';g.beginPath();g.ellipse(px,py-2,12,5,0,0,6.29);g.fill();
+    g.fillStyle=BM.obst;g.beginPath();
+    g.moveTo(px-10,py-4);g.quadraticCurveTo(px-13,py-18,px,py-21);
+    g.quadraticCurveTo(px+13,py-18,px+10,py-4);g.closePath();g.fill();
+    g.fillStyle='rgba(190,150,90,.30)';g.fillRect(px-11,py-15,22,2.4);g.fillRect(px-11,py-9,22,2.4);
+    g.fillStyle='rgba(20,14,8,.6)';g.fillRect(px-8,py-23,16,3);
+  }else if(kind==='slab'){
+    g.fillStyle='#0b0b12';g.beginPath();g.ellipse(px,py-2,15,6,0,0,6.29);g.fill();
+    g.fillStyle=BM.obst;g.fillRect(px-12,py-24,24,22);
+    g.fillStyle='rgba(210,206,230,.12)';g.fillRect(px-12,py-24,24,3);
+    g.strokeStyle='rgba(10,10,16,.7)';g.lineWidth=1.2;
+    g.beginPath();g.moveTo(px-6,py-24);g.lineTo(px-6,py-2);g.moveTo(px+6,py-24);g.lineTo(px+6,py-2);g.stroke();
+    g.fillStyle='rgba(210,206,230,.16)';g.beginPath();g.ellipse(px,py-25,7,3,0,0,6.29);g.fill();
+  }else if(kind==='rubble'){
+    g.fillStyle='#0a0c0a';g.beginPath();g.ellipse(px,py-2,14,5,0,0,6.29);g.fill();
+    g.fillStyle='#4a4130';
+    g.beginPath();g.moveTo(px-13,py-2);g.lineTo(px-4,py-24);g.lineTo(px+3,py-10);g.lineTo(px+12,py-2);g.closePath();g.fill();
+    g.strokeStyle='#5c5340';g.lineWidth=2.4;
+    g.beginPath();g.moveTo(px-9,py-2);g.lineTo(px-2,py-26);g.moveTo(px+8,py-2);g.lineTo(px+2,py-24);g.stroke();
+    g.fillStyle='rgba(160,170,160,.10)';g.fillRect(px-8,py-18,16,2);
+  }else if(kind==='tufts'){
+    g.fillStyle='#0a0d08';g.beginPath();g.ellipse(px,py-2,15,5,0,0,6.29);g.fill();
+    g.fillStyle=BM.obst;
+    g.beginPath();g.arc(px-5,py-8,7,0,6.29);g.arc(px+5,py-10,6.4,0,6.29);g.arc(px,py-15,5.6,0,6.29);g.fill();
+    g.fillStyle='rgba(166,196,136,.18)';
+    g.beginPath();g.arc(px-6,py-11,3.2,0,6.29);g.arc(px+3,py-16,2.8,0,6.29);g.fill();
+  }else{
+    // crate on planks
+    g.fillStyle='#0b0a08';g.beginPath();g.ellipse(px,py-2,14,5,0,0,6.29);g.fill();
+    g.fillStyle=BM.obst;g.fillRect(px-11,py-22,22,20);
+    g.strokeStyle='rgba(20,16,10,.7)';g.lineWidth=1.4;
+    g.strokeRect(px-11,py-22,22,20);
+    g.beginPath();g.moveTo(px-11,py-22);g.lineTo(px+11,py-2);g.moveTo(px+11,py-22);g.lineTo(px-11,py-2);g.stroke();
+  }
 }
 function draw(){
   if(!CB)return;
   var g=ctx;
-  g.fillStyle='#0a0b10';g.fillRect(0,0,cv.width,cv.height);
-  var grd=g.createLinearGradient(0,0,0,cv.height);
-  grd.addColorStop(0,'#141620');grd.addColorStop(1,'#08090d');
-  g.fillStyle=grd;g.fillRect(0,0,cv.width,cv.height);
+  fitBoard();
+  if(REC)g.setTransform(K,0,0,K,0,0);
+  var BM=boardMat();
+  g.fillStyle='#0a0b10';g.fillRect(0,0,CW,CH);
+  var grd=g.createLinearGradient(0,0,0,CH);
+  grd.addColorStop(0,BM.bg0);grd.addColorStop(1,BM.bg1);
+  g.fillStyle=grd;g.fillRect(0,0,CW,CH);
+  /* Where the company is standing gets a little warmer, and the edges of the board
+     fall off into the dark: the fight is a lit space, not an infinite grid. */
+  var lpx=0,lpy=0,lpn=0;
+  CB.pcs.forEach(function(u){if(!u.c.dead){lpx+=isoX(u.x+.5,u.y+.5);lpy+=isoY(u.x+.5,u.y+.5);lpn++;}});
   // floor tiles back-to-front with highlights
   for(var s=0;s<W+H-1;s++){
     for(var x=0;x<W;x++){
@@ -870,10 +1013,14 @@ function draw(){
       var px=isoX(x,y),py=isoY(x,y);
       var obst=CB.obstacles.some(function(o){return o.x===x&&o.y===y;});
       diamond(px,py);
-      g.fillStyle=obst?'#1b1e29':((x+y)%2?'#23283a':'#1e2230');
+      var bh=boardHash(x,y);
+      var tint=obst?'rgba(0,0,0,.34)':((bh%9===0)?'rgba(255,255,255,.028)':((bh%9===1)?'rgba(0,0,0,.10)':'rgba(0,0,0,0)'));
+      g.fillStyle=((x+y)%2?BM.a:BM.b);
       g.fill();
-      g.strokeStyle='rgba(227,181,74,0.06)';g.stroke();
-      if(obst){g.fillStyle='#2a2f42';g.fillRect(px-10,py-26,20,22);}
+      if(tint!=='rgba(0,0,0,0)'){diamond(px,py);g.fillStyle=tint;g.fill();}
+      g.strokeStyle=BM.grout;g.stroke();
+      if(!obst)boardDetail(g,px,py,x,y,BM);
+      if(obst)drawObstacle(g,px,py,BM);
       var mk=CB.moveSet[x+','+y];
       if(CB.turn&&CB.turn.side==='p'&&!CB.tool&&mk!==undefined&&!(x===CB.turn.x&&y===CB.turn.y)){
         diamond(px,py);g.fillStyle='rgba(90,130,220,0.14)';g.fill();
@@ -883,6 +1030,18 @@ function draw(){
       }
     }
   }
+  if(lpn){
+    var lgr=g.createRadialGradient(lpx/lpn,lpy/lpn,10,lpx/lpn,lpy/lpn,Math.max(TW*3.4,TW*(3+lpn)));
+    lgr.addColorStop(0,BM.warm);lgr.addColorStop(1,'rgba(0,0,0,0)');
+    g.fillStyle=lgr;
+    g.save();g.beginPath();
+    g.moveTo(isoX(0,0),isoY(0,0)+TH/2);g.lineTo(isoX(W,0),isoY(W,0));
+    g.lineTo(isoX(W,H),isoY(W,H)-TH/2);g.lineTo(isoX(0,H),isoY(0,H));g.closePath();g.clip();
+    g.fillRect(0,0,CW,CH);g.restore();
+  }
+  var vgn=g.createRadialGradient(CW/2,TOP+(W+H)*TH/4,Math.min(CW,CH)*0.18,CW/2,TOP+(W+H)*TH/4,Math.max(CW,CH)*0.78);
+  vgn.addColorStop(0,'rgba(0,0,0,0)');vgn.addColorStop(1,BM.shadow);
+  g.fillStyle=vgn;g.fillRect(0,0,CW,CH);
   // units back to front
   var all=CB.pcs.concat(CB.mons).filter(function(u){return u.side==='p'?!u.c.dead:!u.gone||u.side==='p';})
     .filter(function(u){return u.side==='p'?!u.c.dead:!u.gone;})
@@ -890,13 +1049,13 @@ function draw(){
   all.forEach(function(u){drawUnit(u);});
   drawFX();
   // banner
-  g.fillStyle='rgba(10,11,16,0.75)';g.fillRect(0,0,cv.width,56);
+  g.fillStyle='rgba(10,11,16,0.75)';g.fillRect(0,0,CW,56);
   g.fillStyle='#e3b54a';g.font='16px Georgia';
   g.fillText(CB.spec.title||'Battle',16,24);
   g.fillStyle='#9a917c';g.font='12px Georgia';
   g.fillText('Round '+CB.round+' · foes '+CB.mons.filter(function(m){return standing(m);}).length+' · company '+CB.pcs.filter(function(p){return !isDown(p);}).length+(CB.surprise?' · SURPRISED':''),16,44);
   // initiative strip (right, upcoming order)
-  var ix=cv.width-16;g.textAlign='right';
+  var ix=CW-16;g.textAlign='right';
   CB.order.slice(Math.max(0,CB.idx),CB.idx+9).forEach(function(uu,i){
     g.fillStyle=uu===CB.turn?'#e3b54a':(uu.side==='p'?'#cfd6e4':'#c0603f');
     g.font=(uu===CB.turn?'bold 13px  ':'12px ')+'Georgia';
@@ -918,8 +1077,12 @@ function drawUnit(u){
   var px=isoX(ux,uy),py=isoY(ux,uy);
   var pc=u.side==='p';
   var down=pc&&u.c.hp<=0;
-  var col=pc?(u.c.color||'#8899bb'):(u.def.undead?'#b9b29a':u.def.size==='L'?'#c05a3a':u.def.regen?'#5d7d4a':'#a0522d');
-  var hgt=pc?34:(u.def.size==='L'?46:u.def.size==='S'?22:34);
+  // The pawn IS the portrait: same silhouette, same palette, same size factor.
+  // The board used to draw everyone as a tapered pin in a colour of its own
+  // invention, so a troll was merely "a taller orange thing".
+  var F=window.Figures;
+  var sz=(F&&F.sizeOf)?F.sizeOf(u.def):(u.def.size==='L'?1.4:(u.def.size==='S'?0.72:1));
+  var hgt=Math.round((pc?32:30)*sz);
   if(u===CB.turn){ctx.fillStyle='rgba(227,181,74,0.18)';ctx.beginPath();ctx.ellipse(px,py+3,26,12,0,0,6.283);ctx.fill();}
   // team base ring + contact shadow
   ctx.strokeStyle=pc?'rgba(120,160,220,0.5)':'rgba(200,90,60,0.5)';
@@ -928,15 +1091,22 @@ function drawUnit(u){
   if(down){
     ctx.strokeStyle='#7a2d24';ctx.lineWidth=3;
     ctx.beginPath();ctx.moveTo(px-10,py-8);ctx.lineTo(px+10,py+4);ctx.moveTo(px-10,py+4);ctx.lineTo(px+10,py-8);ctx.stroke();ctx.lineWidth=1;
+  }else if(F){
+    var fd=u._fd||(u._fd=(function(){
+      var d=pc?F.figForChar(u.c):F.monDesc(u.mid,u.def);
+      var o={};for(var k in d)if(d.hasOwnProperty(k))o[k]=d[k];
+      o.noShadow=true;                      // the board draws its own ground
+      return o;})());
+    var pose=(((Date.now()/260)|0)+(u.x*7+u.y*13))%F.FRAMES;
+    F.inBoxAnim(ctx,fd,px,py,hgt,pose);
   }else{
-    // body: tapered figure
-    ctx.fillStyle=col;
+    // fallback only if figures.js ever fails to load: a readable pin
+    ctx.fillStyle=pc?(u.c.color||'#8899bb'):'#a0522d';
     ctx.beginPath();
     ctx.moveTo(px,py-hgt);ctx.quadraticCurveTo(px+12,py-hgt*0.55,px+8,py);
     ctx.lineTo(px-8,py);ctx.quadraticCurveTo(px-12,py-hgt*0.55,px,py-hgt);
     ctx.fill();
-    // head
-    ctx.fillStyle=pc?'#d8c7a8':(u.def.undead?'#cfc6ad':'#c98f6a');
+    ctx.fillStyle=pc?'#d8c7a8':'#c98f6a';
     ctx.beginPath();ctx.arc(px,py-hgt-5,pc?7:6,0,6.283);ctx.fill();
     if(u.fx&&u.fx.invisT>0){ctx.fillStyle='rgba(10,11,16,0.55)';ctx.fillRect(px-14,py-hgt-14,28,hgt+16);}
     if(u.flee){ctx.fillStyle='#e3b54a';ctx.font='14px Georgia';ctx.fillText('⇶',px+10,py-20);}
@@ -967,7 +1137,8 @@ function logEvent(m){
 function onClick(e){
   if(!CB||CB.done||!CB.turn||CB.turn.side!=='p')return;
   var r=cv.getBoundingClientRect();
-  var pt=unIso((e.clientX-r.left)*(cv.width/r.width),(e.clientY-r.top)*(cv.height/r.height));
+  // client px → design units (the board is drawn through the fit transform)
+  var pt=unIso((e.clientX-r.left)*(CW/(r.width||CW)),(e.clientY-r.top)*(CH/(r.height||CH)));
   var u=CB.turn;
   var target=CB.mons.find(function(m){return standing(m)&&m.x===pt.x&&m.y===pt.y;});
   var ally=CB.pcs.find(function(p){return !isDown(p)&&p.x===pt.x&&p.y===pt.y;});
@@ -1018,7 +1189,8 @@ function onKey(e){
   }
   return false;
 }
-function init(canvas){cv=canvas;cv.addEventListener('click',onClick);}
+function init(canvas){cv=canvas;ctx=cv.getContext('2d');cv.addEventListener('click',onClick);fitBoard();}
+function resize(){fitBoard();if(CB)draw();}
 /* autopilot: sane default act for the current pc (used by headless tests, handy for demos) */
 function autoAct(){
   if(!CB||!CB.turn||CB.turn.side!=='p')return;
@@ -1045,7 +1217,7 @@ function autoAct(){
   else if(u.c.hp<=0){} // downed by an opening blow: nothing more this act
   if(CB&&CB.token===tk)endAct();
 }
-return{start:start,isActive:isActive,onKey:onKey,init:init,autoAct:autoAct,__build:function(u){buildCommands(u);},_move:function(u,tx,ty){CB.turn=u;CB.moveSet=moveSet(u);return doMove(u,tx,ty);},
+return{start:start,isActive:isActive,onKey:onKey,init:init,resize:resize,autoAct:autoAct,__build:function(u){buildCommands(u);},_move:function(u,tx,ty){CB.turn=u;CB.moveSet=moveSet(u);return doMove(u,tx,ty);},
   _turn:function(){return CB&&CB.turn;},_cb:function(){return CB;},
   _clear:function(){if(CB&&CB.done)CB=null;}};
 })();

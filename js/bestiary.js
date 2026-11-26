@@ -37,7 +37,7 @@ function show(){
     try{
       var pc=document.createElement('canvas');
       pc.width=62;pc.height=80;pc.style.cssText='flex:0 0 auto;border-radius:6px';
-      Figures.monFigure(def||{n:'Unnamed',fig:'blob'},pc);
+      Figures.monFigure(def||{n:'Unnamed',fig:'blob'},pc,id);
       row.appendChild(pc);
     }catch(e){}
     var left=UI.el('div');

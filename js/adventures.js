@@ -41,6 +41,14 @@ var POOL={
  devils:[['hellhound',1],['specter',1],['zealot',2],['wight',1],['hellhound',2]],
 };
 POOL.goblinoid=POOL.goblinoid.filter(function(e){return MONSTERS[e[0]];});
+/* The monster theme decides what the rooms are MADE of, so a delve reads before
+   you meet anything in it. Consumed by View3d.materialFor via def.mat. */
+var MATFORTHEME={
+  undead:'crypt',dragon:'crypt',wizard:'crypt',lycanthrope:'crypt',
+  underdark:'mine',elemental:'mine',fungus:'mine',goblinoid:'mine',
+  bandits:'hall',menagerie:'hall',frozen:'keep',devils:'keep',
+  vermin:'cellar',beasts:'cellar',swamp:'cellar',giants:'keep'
+};
 function poolFor(theme){return (POOL[theme]||POOL.beasts).filter(function(e){return MONSTERS[e[0]];});}
 function bossFor(theme){
   var p=poolFor(theme).slice().sort(function(a,b){return (MONSTERS[b[0]].xp||0)-(MONSTERS[a[0]].xp||0);});
@@ -526,6 +534,7 @@ function build(){
           name:__dungeonName+(floors>1?' — floor '+(ix+1):''),locName:__dungeonName.toLowerCase(),
           grid:fd2.grid,start:{x:fd2.entry.x,y:fd2.entry.y,dir:fd2.entry.dir},
           ev:fd2.ev,traps:fd2.traps,stairs:fd2.stairs,wander:fd2.wander,
+          mat:MATFORTHEME[theme]||'crypt',        // who built this, and what is overhead
           desc:'Cut rooms and older purpose. Floor '+(ix+1)+' of '+floors+'.'};
       });
       // village + region

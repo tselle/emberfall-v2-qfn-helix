@@ -139,12 +139,49 @@ function revealSight(mapId,x,y,dir){
 function initSeen(){if(!G.seen)G.seen={};if(!G.ground)G.ground={};if(!G.mods)G.mods={};if(!G.flags)G.flags={};}
 
 /* ============ Map entry ============ */
+/* Nearest walkable tile to a position, searched outward in rings. A save stores a
+   position, not a promise: if a later map change leaves the company standing in a
+   wall, take the closest floor rather than rendering from inside masonry. */
+function nearFloor(prep,x,y){
+  /* Not-solid is not the same as usable. Sealing a building front leaves the odd
+     one-tile pocket behind a wall, and dropping a company into one would trade a
+     wall for a cage. So a landing tile must open onto at least a few connected
+     tiles of floor. */
+  function room(nx,ny){
+    var seen={},q=[[nx,ny]],n=0;
+    seen[nx+','+ny]=1;
+    while(q.length&&n<12){
+      var p=q.pop();n++;
+      for(var d=0;d<4;d++){
+        var ax=p[0]+[0,1,0,-1][d],ay=p[1]+[-1,0,1,0][d];
+        if(ax<0||ay<0||ax>=prep.w||ay>=prep.h)continue;
+        var k=ax+','+ay;if(seen[k])continue;
+        if(prep.solid(ax,ay))continue;
+        seen[k]=1;q.push([ax,ay]);
+      }
+    }
+    return n>=4;
+  }
+  for(var r=1;r<=6;r++){
+    for(var dy=-r;dy<=r;dy++)for(var dx=-r;dx<=r;dx++){
+      if(Math.max(Math.abs(dx),Math.abs(dy))!==r)continue;
+      if(!prep.solid(x+dx,y+dy)&&room(x+dx,y+dy))return [x+dx,y+dy];
+    }
+  }
+  return null;
+}
 function enterMap(mapId,x,y,dir,opts){
   opts=opts||{};
   var def=MAPS[mapId];
   if(!def){UI.toast('That way leads nowhere (map missing).');return;}
   X={mapId:mapId,def:def,prep:View3D.prepare(effMap(mapId)),busy:false,pending:null,
      skipStairs:!opts.restoring,prompted:{},mode:def.overland?'wild':'local',cam:{x:x+.5,y:y+.5,dir:dir}};
+  /* Local maps only: the wall set here counts woods impassable, and on the
+     overland woods are simply slow ground you are entitled to stand in. */
+  if(opts.restoring&&!def.overland&&X.prep&&X.prep.solid(x,y)){
+    var free=nearFloor(X.prep,x,y);
+    if(free){x=free[0];y=free[1];X.cam.x=x+.5;X.cam.y=y+.5;}
+  }
   Watch.forget();
   G.map=mapId;G.x=x;G.y=y;G.dir=dir;
   // canvas mode switching
@@ -520,12 +557,19 @@ function bump(dx,dy){
   var nx=G.x+dx,ny=G.y+dy;
   var c=cellAt(G.map,nx,ny);
   if(c==='G'){gateModal();return;}
-  if(/[1-9]/.test(c)&&X.def.locs&&X.def.locs[c]){serviceModal(X.def.locs[c]);return;}
+  if(/[1-9]/.test(c)&&X.def.locs&&X.def.locs[c]){
+    /* A shop is a room you go into, not a gap in a wall you talk through. Its front is
+       closed from the lane, so knocking takes you in and the keeper comes over once you
+       are standing inside. Pacing about within the same room is just walking. */
+    if(c===cellAt(G.map,G.x,G.y)){serviceModal(X.def.locs[c]);return;}
+    if(opaque(G.map,nx,ny)){serviceModal(X.def.locs[c]);return;}   // modded shut: talk through the wall
+    stepTo(nx,ny,function(){serviceModal(X.def.locs[c]);});return;
+  }
   if(c==='L'){lockModal(nx,ny);return;}
   if(opaque(G.map,nx,ny)){UI.log('dim','The way is firm.');return;}
   stepTo(nx,ny);
 }
-function stepTo(nx,ny){
+function stepTo(nx,ny,after){
   if(X.busy){return;}
   var from={x:G.x,y:G.y};
   X.busy=true;
@@ -536,6 +580,7 @@ function stepTo(nx,ny){
     X.busy=false;
     paintMinimap();UI.hud();
     arrivalSeq();
+    if(after)after();            // the thing the step was for: a door, a face, a service
     if(!UI.top())Watch.step();   // bands advance only when the way is clear of modals
     drainPending();
   });
@@ -563,9 +608,13 @@ function shortDelta(from,to){
   if(d===3)d=-1;if(d===2)d=2;   // right turn +1, left -1, about 2
   return d;
 }
+/* side +1 is the E key, which means "step to your right". With y growing southward
+   on the map, turning a facing vector a quarter turn to the right is (-y, x): face
+   north (0,-1) and the right hand points east (1,0). The old (y,-x) is the quarter
+   turn to the LEFT, which silently swapped Q and E. */
 function strafe(side){
   var v=facing();
-  bump(side*v[1],-side*v[0]);   // strafe left uses right-hand normal
+  bump(-side*v[1],side*v[0]);
 }
 function walkBack(){
   var v=facing();bump(-v[0],-v[1]);
@@ -643,7 +692,22 @@ function renderView(scale){
   X.cam.dir=G.dir;
   var ms=View3D.render(X.prep,X.cam,scale,{entities:billEntities()});
   X.slowFrame=ms>26;
+  if(scale>=1)governFrames(ms);
   return ms;
+}
+/* Frame governor. Look's quality tier decides the wall slice width and the
+ * device resolution, so walk it with measured frames: one step down after a
+ * handful of over-budget frames, one step up only after a long calm stretch.
+ * Motion frames are painted shrunken on purpose, so only full frames count. */
+var govSlow=0,govFast=0;
+function governFrames(ms){
+  if(ms>26){
+    govFast=0;
+    if(++govSlow>=6){govSlow=0;Look.nudge(-1);}
+  }else if(ms<13){
+    govSlow=0;
+    if(++govFast>=150){govFast=0;Look.nudge(1);}
+  }
 }
 /* Billboards: sighted bands, stairs and discovered-but-unlooted treasure. */
 function billEntities(){
@@ -695,6 +759,13 @@ function gameOver(){
 }
 function paintMinimap(){
   var mc=document.getElementById('minimap');if(!mc||!X)return;
+  // the survey panel drives the minimap's box; the backing store follows the device
+  var host=document.getElementById('mapPanel');
+  if(host){
+    var aw=Math.max(120,host.clientWidth-14),ah=Math.max(90,host.clientHeight-30);
+    var asp=500/420,mw=Math.min(aw,ah*asp);
+    try{Look.fitBox(mc,mw,mw/asp);}catch(e){}
+  }
   // marks: traps found (cross), loot (pink)
   View3D.minimap(X.prep,G.seen[G.map],G.x,G.y,G.dir,{canvas:mc,bands:bandPips()});
   var ctx=mc.getContext('2d');
@@ -970,6 +1041,41 @@ function embers(){
 }
 
 /* ============ Bootstrap ============ */
+/* Stage resizes (window, orientation, iOS URL bar, tier changes) refit every
+ * surface and repaint the one that is showing. Look.fit() no-ops when nothing
+ * changed, so this is cheap even on Safari's resize spam. */
+var relayoutTimer=null;
+function relayout(){
+  if(relayoutTimer)clearTimeout(relayoutTimer);
+  relayoutTimer=setTimeout(function(){
+    relayoutTimer=null;
+    View3D.resize();
+    Over.resize();
+    Combat.resize();
+    if(X){
+      if(X.mode==='wild')Over.render();else renderView(1);
+      paintMinimap();
+    }
+  },110);
+}
+window.addEventListener('resize',relayout);
+window.addEventListener('orientationchange',relayout);
+
+/* Pin a quality tier from the menu. Every stage surface has to be re-fit and
+ * repainted, because the tier decides how many device pixels each one asks for. */
+function lookTier(i){
+  Look.lock(true);
+  Look.setTier(i);
+  View3D.resize();
+  relayout();
+}
+/* Hand the tier back to the frame governor and let it settle itself again. */
+function lookAuto(){
+  Look.lock(false);
+  govSlow=0;govFast=0;
+  relayout();
+}
+
 document.addEventListener('DOMContentLoaded',function(){
   View3D.init(document.getElementById('view3d'));
   Over.init(document.getElementById('overCanvas'));
@@ -993,6 +1099,7 @@ return{
   enterMap:enterMap,initSeen:initSeen,closeStairsLoop:closeStairsLoop,
   log:function(k,m){UI.log(k,m);},
   __chest:function(ch,key){chestModal({chest:ch},key);},
+  relayout:relayout,lookTier:lookTier,lookAuto:lookAuto,
   hud:function(){UI.hud();if(UI.top()===null&&document.getElementById('party').classList.contains('open'))UI.renderParty();},
   openFullMap:openFullMap,aheadText:aheadText,cellAt:cellAt,
   equip:equip,drop:drop,quitToTitle:quitToTitle,

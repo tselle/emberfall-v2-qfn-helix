@@ -317,6 +317,7 @@ function menu(){
     {label:'Journal (J)',on:function(){Journal.show();}},
     {label:'Bestiary (B)',on:function(){Bestiary.show();}},
     {label:'Touch Controls',on:function(){Navpad.cycle();}},
+    {label:'Picture '+(Look.isLocked()?Look.tierId()+' (yours)':Look.tierId()+' (auto)'),on:function(){pictureMenu();}},
     {label:'Save',on:function(){saveDialog();}},
     {label:'Load',on:function(){loadDialog();}},
     {label:'Campaign',disabled:!safe,title:safe?'':'Travel is only possible from a safe town',on:function(){Campaign.travelMenu();}},
@@ -324,6 +325,32 @@ function menu(){
     {label:'Quit to Title',on:function(){Game.quitToTitle();}},
     {label:'Resume',primary:1}
   ]});
+}
+/* The quality tier exists whether or not anyone can see it: it sets the wall
+   slice width, the ground-cast budget and the texture atlas size, and the frame
+   governor walks it with measured frames. This makes it a control instead of a
+   console command — with the measured cost of the choice stated in it, because a
+   player picking "Ultra" on a phone should know what they just asked for. */
+function pictureMenu(){
+  var ids=(Look.TIERS||[]).map(function(t){return t.id;});
+  var line='Current: <b>'+Look.tierId()+'</b> '
+    +(Look.isLocked()?'<span class="muted">(pinned by you)</span>':'<span class="muted">(governor\u2019s choice)</span>')
+    +'<br>Wall slice <b>'+Look.colw()+'</b> design units \u00b7 cast budget <b>'+Look.floorBudget()+'</b> samples'
+    +' \u00b7 device ratio cap <b>'+((Look.TIERS[Look.tierIndex()]||{}).devCap)+'</b>';
+  var acts=[{label:'Let the game choose (auto)',on:function(){Game.lookAuto();menu();}}];
+  ids.forEach(function(id,i){
+    acts.push({label:id.charAt(0).toUpperCase()+id.slice(1),
+      title:i<=1?'Coarse but cheap':'Sharper and dearer',
+      on:function(){Game.lookTier(i);pictureMenu();}});
+  });
+  acts.push({label:'Done',primary:1});
+  modal({title:'Picture quality',body:'<p class="muted">'+line+'</p>'+
+    '<p class="muted">Higher tiers draw the world in finer slices: narrower wall columns, more ground '
+    +'samples per frame, a larger texture atlas. The weathering on the facades and the lamp light '
+    +'from sconces and braziers are fair and above &mdash; on low, rooms are lit only by your own '
+    +'lantern. The game steps the tier down by itself if frames '
+    +'run long, and back up only once a long stretch has been comfortable. Pinning a tier here '
+    +'overrides that, which is the right choice on a machine you know.</p>',actions:acts});
 }
 function help(){
   modal({title:'How to Play',body:

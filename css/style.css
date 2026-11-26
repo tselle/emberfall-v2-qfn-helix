@@ -8,12 +8,15 @@
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
 body{background:var(--bg);color:var(--ink);font:15px/1.45 Georgia,Palatino,"Palatino Linotype",serif;overflow:hidden;-webkit-text-size-adjust:100%}
-button{font:inherit;color:var(--ink);background:linear-gradient(#232838,#1a1e2b);border:1px solid var(--edge2);border-radius:5px;padding:7px 14px;cursor:pointer;min-height:34px}
+button{font:inherit;color:var(--ink);background:linear-gradient(#232838,#1a1e2b);border:1px solid var(--edge2);border-radius:5px;padding:7px 14px;cursor:pointer;min-height:34px;
+  box-shadow:0 1px 0 #000a,inset 0 1px 0 #ffffff10;transition:background .13s ease,border-color .13s ease,box-shadow .13s ease,transform .06s ease}
 button:hover:not(:disabled){border-color:var(--gold);background:linear-gradient(#2b3145,#20242f)}
 button:active:not(:disabled){transform:translateY(1px)}
 button.primary{background:linear-gradient(#b8481f,#8f3719);border-color:#d6653c;font-weight:bold}
 button.primary:hover:not(:disabled){background:linear-gradient(#cf5526,#a5401d);border-color:var(--gold)}
 button:disabled{opacity:.4;cursor:default}
+button:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+button.primary:focus-visible{outline-color:var(--emberHi)}
 h1,h2,h3{font-weight:normal;letter-spacing:.04em}
 .eyebrow{font-size:11px;letter-spacing:.28em;color:var(--muted);text-transform:uppercase}
 .muted{color:var(--muted)} .gold{color:var(--gold)}
@@ -71,7 +74,9 @@ h1,h2,h3{font-weight:normal;letter-spacing:.04em}
 
 /* ---------- Game layout ---------- */
 #game{background:#000}
-#hud{display:flex;align-items:center;gap:14px;padding:6px 12px;background:var(--panel);border-bottom:1px solid var(--edge);min-height:var(--hud);padding-top:calc(6px + env(safe-area-inset-top))}
+#hud{display:flex;align-items:center;gap:14px;padding:6px 12px;min-height:var(--hud);padding-top:calc(6px + env(safe-area-inset-top));
+  background:linear-gradient(#1d2029,#14161d);border-bottom:1px solid var(--edge);
+  box-shadow:0 3px 14px #000b;position:relative;z-index:4}
 #hud #partyToggle{padding:5px 10px}
 #hud #where{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.15}
 #hud #where strong{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -83,19 +88,26 @@ h1,h2,h3{font-weight:normal;letter-spacing:.04em}
 #stage{position:relative;flex:1;min-height:0;background:#000;overflow:hidden;container-type:size}
 #stage canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 #sceneLabel{position:absolute;top:8px;left:10px;color:var(--ink);text-shadow:0 1px 3px #000,0 0 10px #000;font-size:14px;pointer-events:none;letter-spacing:.08em}
+/* The stage gets a hairline of gold at its edge so the painted world reads as a
+   framed view rather than a hole in the page. */
+#stage::after{content:"";position:absolute;inset:0;pointer-events:none;z-index:3;
+  box-shadow:inset 0 0 0 1px #000,inset 0 0 46px #000a,inset 0 0 0 2px #e3b54a14}
 #padToggle{position:absolute;top:6px;right:8px;z-index:5;padding:4px 9px;min-height:0;opacity:.75}
-#battleStatus{position:absolute;top:6px;left:50%;transform:translateX(-50%);background:#0d0e13cc;border:1px solid var(--edge);border-radius:6px;padding:4px 14px;font-size:13px;z-index:5}
+#battleStatus{position:absolute;top:6px;left:50%;transform:translateX(-50%);background:#0d0e13e6;border:1px solid var(--edge2);border-radius:6px;padding:4px 14px;font-size:13px;z-index:5;box-shadow:0 4px 16px #000a}
 #pads{position:absolute;inset:0;pointer-events:none;z-index:6}
 .pad{position:absolute;pointer-events:auto;background:#0d0e1355;border:1px solid var(--edge);border-radius:10px;display:grid;gap:5px;padding:8px;touch-action:none;user-select:none;-webkit-user-select:none}
 .pad.right{right:10px;bottom:10px} .pad.left{left:10px;bottom:10px}
 .pad button{width:clamp(40px,9cqw,54px);height:clamp(40px,9cqw,54px);padding:0;font-size:16px;background:#1f222dcc}
 .pad .mid{font-size:12px}
-#lower{display:grid;grid-template-columns:1fr 260px;background:var(--panel);border-top:1px solid var(--edge);height:clamp(160px,26dvh,240px)}
+#lower{display:grid;grid-template-columns:1fr 260px;background:linear-gradient(#14161d,#171922);border-top:1px solid var(--edge);height:clamp(160px,26dvh,240px);box-shadow:0 -3px 16px #000b}
 #console{display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--edge)}
 #cmdbar{display:flex;gap:6px;padding:6px 10px 2px;flex-wrap:wrap;min-height:44px}
 #cmdbar button{display:flex;align-items:center;justify-content:center;width:44px;height:38px;padding:0}
+/* Battle commands are words, not icons: let them take the width they need so a
+   label can no longer land on its neighbour. */
+#cmdbar button.lab{width:auto;min-width:0;padding:0 10px;gap:3px;font-size:13px;white-space:nowrap}
 #cmdbar button svg{width:21px;height:21px;fill:none;stroke:var(--ink);stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-#cmdbar button.on{border-color:var(--gold)}
+#cmdbar button.on{border-color:var(--gold);box-shadow:0 0 0 1px #e3b54a55,0 1px 0 #000a,inset 0 1px 0 #ffffff14}
 #cmdhint{padding:1px 12px 4px;color:var(--muted);font-size:12px;font-style:italic;min-height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #log{flex:1;overflow:auto;padding:4px 12px 8px;font-size:13.5px;overscroll-behavior:contain}
 #log p{margin:1px 0}
@@ -123,7 +135,8 @@ h1,h2,h3{font-weight:normal;letter-spacing:.04em}
 #modals{position:fixed;inset:0;z-index:50;display:none}
 #modals.on{display:block}
 .mback{position:absolute;inset:0;background:#000a;backdrop-filter:blur(1px)}
-.modal{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(640px,94vw);max-height:min(88dvh,860px);background:var(--panel);border:1px solid var(--gold);border-radius:9px;display:flex;flex-direction:column;box-shadow:0 18px 60px #000e}
+.modal{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(640px,94vw);max-height:min(88dvh,860px);background:linear-gradient(#1c1f29,var(--panel) 40%);border:1px solid var(--gold);border-radius:9px;display:flex;flex-direction:column;box-shadow:0 18px 60px #000e,inset 0 1px 0 #ffffff10;animation:modalin .15s ease-out}
+@keyframes modalin{from{opacity:0;transform:translate(-50%,-49.4%) scale(.985)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
 .modal h3{padding:12px 16px 8px;color:var(--gold);font-size:18px;border-bottom:1px solid var(--edge)}
 .modal .body{padding:12px 16px;overflow:auto;flex:1}
 .modal .body p{margin:6px 0}
@@ -169,6 +182,9 @@ h1,h2,h3{font-weight:normal;letter-spacing:.04em}
 }
 @media (prefers-reduced-motion:reduce){
   #party{transition:none}
+  button{transition:none}
+  .modal{animation:none}
+  #ui-tip{transition:none}
 }
 
 /* ---- hover tooltip layer (ui.js) ---- */

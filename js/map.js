@@ -38,16 +38,101 @@ function paint(cv,st){
   st.s=s;st.ox=ox;st.oy=oy;
   g.fillStyle='#0b0c11';g.fillRect(0,0,cw,ch);
   function known(x,y){return !seen||!seen[y]||!seen[y][x]==='1'?false:true;}
-  /* known terrain */
+  /* Known terrain, drawn as a plan rather than a grid of coloured cells. Each
+     square takes its ground colour, then: where the ground on one side of an edge
+     differs from the ground on the other, that edge is inked, so a road, a shore or
+     a wall reads as a LINE instead of a stair of pixels. Walls get masonry hatching,
+     woods get trees, hills get hachures, water gets ripples - a surveyor's
+     conventions. Where explored ground runs out the frontier is ruled in gold, which
+     is the map admitting where it stops being true. */
+  function klass(cc){
+    if(cc==='#'||cc==='H'||cc==='B'||cc==='F'||cc==='S')return 'wall';
+    if(cc==='^')return 'rock';
+    if(cc==='~')return 'water';
+    if(cc==='%')return 'fen';
+    if(cc==='T')return 'wood';
+    if(cc==='n')return 'hill';
+    if(cc==='='||cc==='+')return 'road';
+    if(cc==='D'||cc==='L')return 'door';
+    if(cc==='<'||cc==='>')return 'stair';
+    if(/[1-9]/.test(cc))return 'loc';
+    if(/^[A-Z]$/.test(cc))return 'site';
+    return 'open';
+  }
+  function klassAt(ax,ay){return known(ax,ay)?klass(prep.char[ay*W+ax]):'void';}
+  var inkEdge=[],goldEdge=[];
+  /* ---- known terrain ---- */
   var labels=[];   /* occupied label rects for collision */
   var box=[];      /* marker rects: keep clear of glyphs */
   for(var y=0;y<H;y++)for(var x=0;x<W;x++){
     if(!known(x,y)){continue;}
     var c=prep.char[y*W+x];
     var col=pal(c,!!(st.def.outdoor||st.def.safe||st.def.overland),x,y,known);
-    g.fillStyle=col;g.fillRect(ox+x*s,oy+y*s,Math.ceil(s),Math.ceil(s));
-    if(c==='T'||c==='n'||c==='^'){   // light interior texture
-      g.fillStyle='rgba(255,255,255,.05)';g.fillRect(ox+x*s+s*.2,oy+y*s+s*.2,s*.6,s*.6);
+    var cx0=ox+x*s,cy0=oy+y*s,cellW=Math.ceil(s);
+    g.fillStyle=col;g.fillRect(cx0,cy0,cellW,cellW);
+    var kc=klass(c);
+    if(s>=6){
+      if(kc==='wall'){                     /* masonry hatch, as on a building plan */
+        g.strokeStyle='rgba(9,10,16,.38)';g.lineWidth=1;
+        g.beginPath();
+        for(var hx=-cellW;hx<cellW;hx+=Math.max(3,cellW*.34)){
+          g.moveTo(cx0+Math.max(0,hx),cy0+(hx<0?cellW:0));
+          g.lineTo(cx0+Math.min(cellW,hx+cellW),cy0+(hx<0?0:cellW-Math.max(0,hx)));
+        }
+        g.stroke();
+      }else if(kc==='wood'){
+        g.fillStyle='#16281b';
+        g.beginPath();g.arc(cx0+s*.5,cy0+s*.64,s*.20,0,6.29);g.fill();
+        g.fillStyle='#3f6b45';
+        g.beginPath();g.moveTo(cx0+s*.5,cy0+s*.16);g.lineTo(cx0+s*.74,cy0+s*.62);
+        g.lineTo(cx0+s*.26,cy0+s*.62);g.closePath();g.fill();
+        g.fillStyle='rgba(150,196,140,.28)';
+        g.beginPath();g.arc(cx0+s*.42,cy0+s*.42,s*.08,0,6.29);g.fill();
+      }else if(kc==='hill'){
+        g.strokeStyle='rgba(236,226,196,.24)';g.lineWidth=Math.max(1,s*.055);
+        g.beginPath();
+        for(var hn=0;hn<3;hn++){
+          var hx2=cx0+s*(.22+hn*.28);
+          g.moveTo(hx2-s*.10,cy0+s*.70);g.lineTo(hx2,cy0+s*.34);g.lineTo(hx2+s*.10,cy0+s*.70);
+        }
+        g.stroke();
+      }else if(kc==='water'){
+        g.strokeStyle='rgba(150,196,228,.40)';g.lineWidth=Math.max(1,s*.05);
+        g.beginPath();
+        for(var wn=0;wn<2;wn++){
+          var wy2=cy0+s*(.34+wn*.32);
+          g.moveTo(cx0+s*.14,wy2);
+          g.quadraticCurveTo(cx0+s*.5,wy2-s*.16,cx0+s*.86,wy2);
+        }
+        g.stroke();
+      }else if(kc==='fen'){
+        g.strokeStyle='rgba(120,170,140,.32)';g.lineWidth=1;
+        g.beginPath();
+        for(var fn=0;fn<3;fn++){
+          var fx2=cx0+s*(.26+fn*.24);
+          g.moveTo(fx2,cy0+s*.82);g.quadraticCurveTo(fx2+s*.08,cy0+s*.5,fx2-s*.04,cy0+s*.22);
+        }
+        g.stroke();
+      }else if(kc==='rock'){
+        g.strokeStyle='rgba(214,222,238,.28)';g.lineWidth=Math.max(1,s*.06);
+        g.beginPath();
+        g.moveTo(cx0+s*.22,cy0+s*.66);g.lineTo(cx0+s*.5,cy0+s*.30);g.lineTo(cx0+s*.78,cy0+s*.66);
+        g.stroke();
+      }else if(kc==='road'){
+        g.fillStyle='rgba(230,212,168,.15)';
+        g.fillRect(cx0+s*.40,cy0+s*.42,Math.max(1.4,s*.20),Math.max(1.4,s*.20));
+      }
+    }
+    if(s>=4){
+      var kU=klassAt(x,y-1),kD=klassAt(x,y+1),kL=klassAt(x-1,y),kR=klassAt(x+1,y);
+      if(kU==='void')goldEdge.push([cx0,cy0,cx0+cellW,cy0]);
+      if(kD==='void')goldEdge.push([cx0,cy0+cellW,cx0+cellW,cy0+cellW]);
+      if(kL==='void')goldEdge.push([cx0,cy0,cx0,cy0+cellW]);
+      if(kR==='void')goldEdge.push([cx0+cellW,cy0,cx0+cellW,cy0+cellW]);
+      if(kU!=='void'&&kU!==kc)inkEdge.push([cx0,cy0,cx0+cellW,cy0]);
+      if(kD!=='void'&&kD!==kc)inkEdge.push([cx0,cy0+cellW,cx0+cellW,cy0+cellW]);
+      if(kL!=='void'&&kL!==kc)inkEdge.push([cx0,cy0,cx0,cy0+cellW]);
+      if(kR!=='void'&&kR!==kc)inkEdge.push([cx0+cellW,cy0,cx0+cellW,cy0+cellW]);
     }
     if(/[1-9]/.test(c)){
       g.fillStyle='#12131a';g.fillRect(ox+x*s+s*.18,oy+y*s+s*.18,s*.64,s*.64);
@@ -58,6 +143,21 @@ function paint(cv,st){
       box.push([ox+x*s,oy+y*s,s,s]);
     }
   }
+  /* Two edge passes at the end, so the linework sits above every cell fill and is
+     never overpainted by the next square along. */
+  if(inkEdge.length){
+    g.strokeStyle='rgba(10,11,16,.55)';g.lineWidth=Math.max(1,s*.06);
+    g.beginPath();
+    for(var ie=0;ie<inkEdge.length;ie++){var e0=inkEdge[ie];g.moveTo(e0[0],e0[1]);g.lineTo(e0[2],e0[3]);}
+    g.stroke();
+  }
+  if(goldEdge.length){
+    g.strokeStyle='rgba(227,181,74,.26)';g.lineWidth=Math.max(1.2,s*.085);
+    g.beginPath();
+    for(var ge=0;ge<goldEdge.length;ge++){var e1=goldEdge[ge];g.moveTo(e1[0],e1[1]);g.lineTo(e1[2],e1[3]);}
+    g.stroke();g.lineWidth=1;
+  }
+
   /* found-trap crosses */
   Object.keys((gsave()&&gsave().flags)||{}).forEach(function(f){
     var m=/^trapseen:([^:]+):(\d+),(\d+)$/.exec(f);
