@@ -145,6 +145,7 @@ function prepare(mapDef){
   prep.doorW=sd.mask;prep.doorFaces=sd.faces;prep.doorRooms=sd.rooms;
   prep.lights=mapLights(w,h,wall,mapDef,sd.faces);
   prep.props=propsFor(prep);
+  prep.props=prep.props.concat(fixturesFor(prep));   // the village's own furniture
   return prep;
 }
 
@@ -228,6 +229,125 @@ function propsFor(prep){
   return out;
 }
 
+/* Where a village keeps its fixtures.
+   A lane with nothing against its walls reads as scenery however good the walls are;
+   a lane with a woodpile, a ladder and a water trough reads as somewhere people live.
+   So the pieces are placed from what the map already claims: the smith gets an anvil at
+   his door, the chapel a bench and a notice board, the dock crates and a barrel, the
+   fountain square a bench, and the gate a finger post. The rest goes where there is a
+   wall to stand against, kept apart so one street does not collect everything. Every
+   fixture hugs its wall rather than sitting in the middle of the thoroughfare, since a
+   billboard you walk through still looks like a doorway you failed to notice.
+   Seeded from the map's own name, so the village is furnished the same way every visit. */
+function fixturesFor(prep){
+  var out=[],def=prep.def,g=def&&def.grid;
+  if(!g||!g.length||def.overland)return out;
+  var w=prep.w,h=prep.h,x,y,i,k;
+  var rng=new Rules.RNG((hashL(0,0,def.id||'m')*0xFFFFFFFF)>>>0);
+  var used={};
+  for(i=0;i<(prep.props||[]).length;i++)
+    used[((prep.props[i].y|0)*w)+(prep.props[i].x|0)]=1;
+  var block='GS<>#HBTFL^~';
+  if(def.exit)for(var ek in def.exit)block+=ek;
+  if(def.locs)for(var lk in def.locs)if(lk.length===1)block+=lk;
+  var NB=[[1,0],[-1,0],[0,1],[0,-1]];
+  /* The map's own landmarks. A well dropped in the middle of a green will otherwise
+     stand in front of the fountain that has always been there, and the viewer sees one
+     water feature where the plan says two: the nearer billboard eats the further one. */
+  var marks=[];
+  for(y=0;y<h;y++)for(x=0;x<Math.min(w,g[y].length);x++)
+    if('F'.indexOf(g[y][x])>=0)marks.push([x+0.5,y+0.5]);
+  function clearOfMarks(tx,ty,rad){
+    for(var q=0;q<marks.length;q++)
+      if(Math.abs(marks[q][0]-tx-0.5)<rad&&Math.abs(marks[q][1]-ty-0.5)<rad)return false;
+    return true;
+  }
+  function freeTile(tx,ty){
+    if(tx<1||ty<1||tx>=w-1||ty>=h-1)return false;
+    var c=g[ty].length>tx?g[ty][tx]:'#';
+    if(block.indexOf(c)>=0||OPENGROUND.indexOf(c)<0)return false;
+    if(prep.solid(tx,ty)||prep.roof[ty*w+tx])return false;   // fixtures stand in the open
+    if(!clearOfMarks(tx,ty,1.6))return false;
+    return !used[ty*w+tx];
+  }
+  function wallDir(tx,ty){for(var n=0;n<4;n++)if(prep.solid(tx+NB[n][0],ty+NB[n][1]))return n;return -1;}
+  function claim(tx,ty,spr,open){
+    var ox=0.5,oy=0.5,wd=open?-1:wallDir(tx,ty);
+    if(wd>=0){ox+=NB[wd][0]*0.24;oy+=NB[wd][1]*0.24;}
+    used[ty*w+tx]=1;
+    out.push({x:tx+ox,y:ty+oy,spr:'prop:'+spr});
+  }
+  function nook(tx,ty,rad){
+    var best=null,bd=1e9;
+    for(var yy=Math.max(1,ty-rad);yy<=Math.min(h-2,ty+rad);yy++)
+      for(var xx=Math.max(1,tx-rad);xx<=Math.min(w-2,tx+rad);xx++){
+        if(!freeTile(xx,yy)||wallDir(xx,yy)<0)continue;
+        var d=(xx-tx)*(xx-tx)+(yy-ty)*(yy-ty);
+        if(d<bd){bd=d;best=[xx,yy];}
+      }
+    return best;
+  }
+  function findChar(chars){
+    /* Every settlement keeps its gate in its own outer wall, so this scan has to run
+       over the boundary rows too; skipping them finds nothing, everywhere. */
+    for(var yy=0;yy<h;yy++)for(var xx=0;xx<Math.min(w,g[yy].length);xx++)
+      if(chars.indexOf(g[yy].charAt(xx))>=0)return [xx,yy];
+    return null;
+  }
+  /* The parish well: it wants open ground with room to stand, and the middle of the
+     settlement rather than a corner. */
+  var best=null,bs=-1e9,mx=(w-1)/2,my=(h-1)/2;
+  for(y=1;y<h-1;y++)for(x=1;x<w-1;x++){
+    if(!freeTile(x,y))continue;
+    var op=0;for(var n2=0;n2<4;n2++)if(!prep.solid(x+NB[n2][0],y+NB[n2][1]))op++;
+    if(op<3)continue;
+    var sc=op*8-Math.abs(x-mx)-Math.abs(y-my);
+    if(sc>bs){bs=sc;best=[x,y];}
+  }
+  if(best)claim(best[0],best[1],'well',true);
+  var anchors=[['b',['anvil','barrel']],['c',['bench','board']],['d',['crate','barrel']],
+               ['F',['bench','trough']],['G',['signpost']]];
+  function freeNear(tx,ty,rad){            // some things belong out in the open
+    var best=null,bd=1e9;
+    for(var yy=Math.max(1,ty-rad);yy<=Math.min(h-2,ty+rad);yy++)
+      for(var xx=Math.max(1,tx-rad);xx<=Math.min(w-2,tx+rad);xx++){
+        if(!freeTile(xx,yy))continue;
+        var d=(xx-tx)*(xx-tx)+(yy-ty)*(yy-ty);
+        if(d<bd){bd=d;best=[xx,yy];}
+      }
+    return best;
+  }
+  for(i=0;i<anchors.length;i++){
+    var at=findChar(anchors[i][0]);
+    if(!at)continue;
+    var kit=anchors[i][1];
+    for(k=0;k<kit.length;k++){
+      /* A sign post at a gate stands out in the yard, where there is no wall to lean
+         against and no sense in looking for one; anything else would rather be against
+         the building it serves. */
+      var nk=nook(at[0],at[1],2+k)||freeNear(at[0],at[1],3+k);
+      if(nk)claim(nk[0],nk[1],kit[k],wallDir(nk[0],nk[1])<0);
+    }
+  }
+  /* The lane itself. Candidates get a seeded key and the best few are taken, kept
+     clear of everything already standing. */
+  var dressing=['woodpile','ladder','haystack','trough','cart','stocks','board','bench','barrel'],
+      cand=[];
+  for(y=1;y<h-1;y++)for(x=1;x<w-1;x++)
+    if(freeTile(x,y)&&wallDir(x,y)>=0)cand.push([x,y,rng.next()]);
+  cand.sort(function(a,b){return b[2]-a[2];});
+  var want=5+rng.int(0,2),got=0;
+  for(i=0;i<cand.length&&got<want;i++){
+    var c2=cand[i],far=true;
+    for(k=0;k<out.length;k++)
+      if(Math.abs(out[k].x-c2[0]-0.5)<1.8&&Math.abs(out[k].y-c2[1]-0.5)<1.8){far=false;break;}
+    if(!far)continue;
+    claim(c2[0],c2[1],dressing[(got+rng.int(0,1))%dressing.length],false);
+    got++;
+  }
+  return out;
+}
+
 function mapLights(w,h,wall,def,doorFaces){
   var out=[],salt=(def&&def.id)||'m';
   /* Density is set by area, not by a per-cell coin flip. A rate is easier to write
@@ -283,6 +403,11 @@ function mapLights(w,h,wall,def,doorFaces){
 
 /* ================= procedural wall textures ================= */
 var TEXCACHE=null,CTEX=null;
+/* A painter that throws used to vanish into `return null`, and the wall quietly drew
+   generic masonry instead: the only symptom was a picture that looked merely dull.
+   Every failure is recorded here and reported on the console, because a missing texture
+   is otherwise indistinguishable from a bad design choice. */
+var TEXFAIL=[];
 function buildTextures(){
   if(TEXCACHE)return TEXCACHE;
   TEXPX=texBaseSize();
@@ -295,7 +420,13 @@ function buildTextures(){
       var g0=c0.getContext('2d');g0.setTransform(SC,0,0,SC,0,0);
       painter(g0,TEX);
       return mkTex(c0);
-    }catch(e){return null;}
+    }catch(e){
+      var rec={painter:Object.keys(TEXCACHE).length,keySoFar:Object.keys(TEXCACHE).join(''),
+               error:String(e&&e.message||e)};
+      TEXFAIL.push(rec);
+      if(window.console&&console.warn)console.warn('Emberfall: texture painter failed',rec);
+      return null;
+    }
   }
   TEXCACHE['#']=tile(function(g){   // warm irregular masonry
     grain(g,'#77705f',22,11);
@@ -388,6 +519,85 @@ function buildTextures(){
     beam(DX-3,DY-1,3,DH+1);beam(DX+DW,DY-1,3,DH+1);
     g.fillStyle='#6d6255';g.fillRect(DX-1,59,DW+2,3);                       // threshold stone
     g.fillStyle='rgba(252,196,120,.16)';g.fillRect(DX,DY,DW,DH);            // light past the leaf
+    g.restore();
+  });
+  /* A fountain. The grid has always had a character for it, and until now it drew the
+     same anonymous masonry as a cellar wall: a fountain is a public thing, standing in
+     a square, and you should know what you have walked into from the far side of the
+     green. Basin courses, a thick rim, wet stone, and a pillar with a spout whose
+     water falls back into the dark. */
+  /* A fountain. The grid has always had a character for it, and until now it drew the
+     same anonymous masonry as a cellar wall.
+     The catch is that this engine has one wall height, and this tile is a wall: a real
+     open basin cannot be modelled here, and a basin painted at the foot of a full-height
+     face reads as a decorative band on a slab. So it is built as what a town of this
+     size would actually raise over its public water: a stone pump-house, basin at the
+     foot where the water goes, trough and wet stone below, and a shingled roof and
+     finial above, so the whole height of the face is a building rather than a plinth. */
+  TEXCACHE['F']=tile(function(g){
+    var S=TEX/64;
+    grain(g,'#8d8778',12,41);
+    var r=new Rules.RNG(4141);
+    g.save();g.scale(S,S);
+    // the body: coursed, dressed stone
+    for(var y=16;y<62;y+=7){
+      var off=(Math.floor(y/7)%2)*7;
+      for(var x=off-6;x<64;x+=15){
+        var v=r.int(-14,14);
+        g.fillStyle='rgb('+(144+v)+','+(138+v)+','+(124+v)+')';
+        g.fillRect(x+1,y+1,13,5);
+        g.fillStyle='rgba(30,28,22,.5)';g.fillRect(x,y,1,6);
+      }
+    }
+    // roof: a steep shingle cap with a finial, so the head of the face is a roof
+    g.fillStyle='#4a3526';g.beginPath();g.moveTo(30,1);g.lineTo(63,17);g.lineTo(1,17);
+    g.closePath();g.fill();
+    for(var sy=5;sy<17;sy+=3){
+      var inset=(sy-1)*1.85;
+      g.fillStyle=sy%6<3?'rgba(88,64,44,.9)':'rgba(58,42,28,.9)';
+      g.fillRect(1+inset,sy,62-inset*2,2.2);
+    }
+    g.fillStyle='#2c2016';g.fillRect(0,16,64,2.6);                 // eaves
+    g.fillStyle='#8b8577';g.fillRect(30,0,3,5);                      // finial stalk
+    g.fillStyle='#c9b06a';g.beginPath();g.arc(31.5,2.4,2.2,0,6.29);g.fill();
+    /* The recess where the water stands. Kept well above black: a niche dark enough to
+       read as depth on a swatch is a hole in the wall at three paces, and the whole
+       point of the porch is that you can see the pillar and the water inside it. */
+    g.fillStyle='#5a5145';g.fillRect(14,20,36,22);
+    g.fillStyle='#494137';g.fillRect(14,20,36,3);                      // head shadow
+    g.fillStyle='#6c6252';g.fillRect(14,38,36,4);                      // the sill it stands on
+    g.fillStyle='#37312a';g.fillRect(12,19,40,2);g.fillRect(12,19,2,24);g.fillRect(50,19,2,24);
+    /* The lintel the porch is cut under, with corbels at its ends. A struck semicircle
+       here wants a radius the porch does not have: it lands on the roof and reads as a
+       rainbow over the building rather than stone carrying stone. */
+    g.fillStyle='#9d9482';g.fillRect(11,17,42,3);
+    g.fillStyle='#b5ac97';g.fillRect(11,17,42,1);
+    g.fillStyle='rgba(30,26,20,.45)';g.fillRect(11,20,42,1.4);
+    g.fillStyle='#8f8878';g.fillRect(9,15,5,7);g.fillRect(50,15,5,7);   // corbels
+    g.fillStyle='#a8a08e';g.fillRect(9,15,5,1.4);g.fillRect(50,15,5,1.4);
+    // pillar, spout and the thread of water falling to the basin
+    g.fillStyle='#b3ab96';g.fillRect(29,26,6,14);
+    g.fillStyle='#cdc5ae';g.fillRect(29,26,6,2);g.fillRect(29,26,1.6,14);
+    g.fillStyle='#7d766a';g.fillRect(27,24,10,3);
+    g.fillStyle='rgba(214,232,238,.8)';g.fillRect(31,28,2,12);
+    g.fillStyle='rgba(214,232,238,.3)';g.fillRect(30,40,4,2);
+    // the basin: a thick rim with water in it, catching the sky
+    g.fillStyle='#a8a08d';g.fillRect(4,40,56,6);
+    g.fillStyle='#c6bea9';g.fillRect(4,40,56,2);
+    g.fillStyle='#25404a';g.fillRect(7,42,50,4);
+    g.fillStyle='rgba(132,172,188,.55)';g.fillRect(9,43,46,1.6);
+    g.fillStyle='rgba(200,218,226,.4)';g.fillRect(16,44,12,1.2);g.fillRect(38,44,9,1);
+    g.fillStyle='rgba(38,34,26,.6)';g.fillRect(4,45,56,2);
+    // the overflow trough and the wet stone below it, with moss at the waterline
+    g.fillStyle='#8f8878';g.fillRect(8,50,48,7);
+    g.fillStyle='#ada592';g.fillRect(8,50,48,2);
+    g.fillStyle='rgba(40,58,62,.38)';g.fillRect(18,46,28,16);
+    g.fillStyle='rgba(72,96,58,.5)';
+    for(var mx=6;mx<58;mx+=5)if(r.chance(.5))g.fillRect(mx,r.int(46,56),r.int(2,4),r.int(2,5));
+    // and the square's own paving at the foot
+    g.fillStyle='rgba(96,88,72,.55)';g.fillRect(0,58,64,6);
+    g.fillStyle='rgba(152,144,124,.45)';
+    for(var px=0;px<64;px+=11)g.fillRect(px,59,9,2);
     g.restore();
   });
   TEXCACHE['H']=tile(function(g){   // Tudor half-timber: plaster + dark oak frame
@@ -537,7 +747,10 @@ function buildTextures(){
     g.fillStyle='rgba(126,100,64,.5)';g.fillRect(0,TEX-8,TEX,1);
     g.fillStyle='rgba(16,12,9,.4)';g.fillRect(0,TEX-2,TEX,2);
   });
-  TEXCACHE['F']=TEXCACHE['#'];
+  /* Secret doors are indistinguishable from their wall, which is the entire point.
+     Fountains are NOT: the grid has always had a character for the town's public water
+     and this line used to paste anonymous masonry over it, which is why a fountain
+     looked like a garden wall no matter what was painted for it. */
   TEXCACHE['S']=TEXCACHE['#'];       // secret doors look like their wall
   return TEXCACHE;
 }
@@ -957,7 +1170,10 @@ function groundTextures(){
    board on a post, which is how a trade was advertised when almost nobody could
    read. */
 var PROPS_H={counter:0.42,shelf:0.80,crate:0.40,barrel:0.40,table:0.34,stool:0.20,
-             cot:0.24,altar:0.56,brazier:0.44,rack:0.72,sign:0.40};
+             cot:0.24,altar:0.56,brazier:0.44,rack:0.72,sign:0.40,
+             /* fixtures: things a village owns rather than a person keeps */
+             well:0.92,cart:0.46,woodpile:0.28,haystack:0.58,trough:0.24,stocks:0.32,
+             signpost:0.86,board:0.50,anvil:0.38,ladder:0.86,bench:0.24};
 var PROPS_FOR={
   inn:['table','stool','cot'],tavern:['table','barrel','brazier'],
   general:['counter','shelf','crate'],apothecary:['counter','shelf','barrel'],
@@ -1102,6 +1318,203 @@ function paintProp(kind,c,g){
     g.fillStyle='rgba(232,190,110,.95)';g.beginPath();g.ellipse(46,43,10,9,0,0,6.29);g.fill();
     g.fillStyle='#5b3d22';g.fillRect(40,40,12,3);g.fillRect(42,46,9,3);
     g.fillStyle='#3d2916';g.fillRect(24,28,44,3);g.fillRect(24,55,44,3);
+    return c;}
+  /* ---- fixtures: the things a village owns ----
+     These are the pieces a street is judged by. A lane with nothing against its walls
+     reads as a set, however good the walls are; a lane with a woodpile, a ladder and a
+     trough reads as somewhere people live. All of them are bottom-anchored like the
+     shop goods, so they stand on the ground and take a shadow. */
+  if(kind==='well'){                                   // the parish well: curb, windlass, bucket
+    W=104;H=124;c.width=W;c.height=H;shadow(g,W,H,0.34);
+    // drum of the curb, coursed stone with a thick top rim
+    g.fillStyle='#8e8878';g.fillRect(18,66,68,50);
+    var r2=new Rules.RNG(9090);
+    for(var wy=68;wy<114;wy+=8){
+      var woff=((wy/8)|0)%2*7;
+      for(var wx=14+woff;wx<88;wx+=17){
+        var wv=r2.int(-16,16);
+        g.fillStyle='rgb('+(150+wv)+','+(144+wv)+','+(130+wv)+')';
+        g.fillRect(wx,wy,15,6);
+        g.fillStyle='rgba(32,28,22,.5)';g.fillRect(wx-1,wy-1,1,7);
+      }
+    }
+    g.fillStyle='#a8a08d';g.beginPath();g.ellipse(52,66,35,10,0,0,6.29);g.fill();
+    g.fillStyle='#2a2b2c';g.beginPath();g.ellipse(52,67,28,7,0,0,6.29);g.fill();
+    g.fillStyle='rgba(120,150,166,.35)';g.beginPath();g.ellipse(46,68,10,2.4,0,0,6.29);g.fill();
+    // posts, windlass beam and a pent roof to keep the rain off the rope
+    g.fillStyle='#573d22';g.fillRect(22,26,7,42);g.fillRect(75,26,7,42);
+    g.fillStyle='#6d4e2c';g.fillRect(16,20,72,7);
+    g.fillStyle='#3f2c17';g.fillRect(16,25,72,2);
+    g.fillStyle='#4e3a22';g.beginPath();g.moveTo(8,22);g.lineTo(52,6);g.lineTo(96,22);
+    g.closePath();g.fill();
+    g.fillStyle='rgba(20,14,8,.45)';
+    for(var sr=0;sr<4;sr++){g.fillRect(14+sr*4,20-sr*3,76-sr*8,1.6);}
+    // pulley, rope and the bucket that lives there
+    g.fillStyle='#7d7566';g.beginPath();g.arc(52,26,5,0,6.29);g.fill();
+    g.fillStyle='#3a332a';g.beginPath();g.arc(52,26,2,0,6.29);g.fill();
+    g.strokeStyle='#b2a279';g.lineWidth=1.6;g.beginPath();g.moveTo(52,30);g.lineTo(52,86);g.stroke();
+    g.fillStyle='#6b4a2a';g.beginPath();g.moveTo(44,86);g.lineTo(60,86);g.lineTo(57,100);
+    g.lineTo(47,100);g.closePath();g.fill();
+    g.fillStyle='#8a6631';g.fillRect(44,86,16,3);
+    g.strokeStyle='#5d554a';g.lineWidth=1.4;g.beginPath();g.arc(52,84,6,Math.PI,0);g.stroke();
+    // moss where the spill runs, and a step to stand on
+    g.fillStyle='rgba(70,96,54,.5)';g.fillRect(20,106,14,8);g.fillRect(70,110,12,6);
+    g.fillStyle='#7d7466';g.fillRect(36,112,32,8);g.fillStyle='#93897a';g.fillRect(36,112,32,2);
+    return c;}
+  if(kind==='cart'){                                   // a hand cart, spoked and loaded
+    W=122;H=76;c.width=W;c.height=H;shadow(g,W,H);
+    function wheel(cx,cy,rad){
+      g.strokeStyle='#3c2a16';g.lineWidth=4;g.beginPath();g.arc(cx,cy,rad,0,6.29);g.stroke();
+      g.strokeStyle='#6b4a2a';g.lineWidth=2.4;
+      for(var s=0;s<6;s++){var a=s*Math.PI/3+0.3;
+        g.beginPath();g.moveTo(cx,cy);g.lineTo(cx+Math.cos(a)*rad,cy+Math.sin(a)*rad);g.stroke();}
+      g.fillStyle='#4a3220';g.beginPath();g.arc(cx,cy,rad*0.24,0,6.29);g.fill();
+      g.fillStyle='#8d7a5c';g.beginPath();g.arc(cx,cy,rad*0.1,0,6.29);g.fill();}
+    wheel(34,52,19);wheel(90,52,19);
+    g.fillStyle='#5b3d22';g.fillRect(14,30,96,10);                 // the bed
+    g.fillStyle='#7a5734';g.fillRect(14,30,96,3);
+    for(var bx=18;bx<108;bx+=11){g.fillStyle='#4a3220';g.fillRect(bx,18,3,13);}   // stanchions
+    g.fillStyle='#6b4a2a';g.fillRect(14,16,96,5);                  // side rail
+    g.fillStyle='#4a3220';g.fillRect(14,40,96,3);
+    g.save();g.translate(110,36);g.rotate(0.42);g.fillStyle='#5b3d22';
+    g.fillRect(0,0,26,4);g.fillRect(0,10,22,4);g.restore();         // shafts
+    pot(g,46,22,9,'#8f7d5c','#a89472');pot(g,66,20,8,'#7d6a4e','#96844e');  // sacks aboard
+    return c;}
+  if(kind==='woodpile'){                               // split logs stacked against the wall
+    W=110;H=54;c.width=W;c.height=H;shadow(g,W,H);
+    var r3=new Rules.RNG(3131);
+    for(var ly=0;ly<3;ly++)for(var lx=0;lx<11;lx++){
+      var cx2=10+lx*9+(ly%2)*4,cy2=H-10-ly*11,rv=r3.int(-3,3);
+      if(cx2>102)continue;
+      g.fillStyle='rgb('+(120+rv)+','+(88+rv)+','+(54+rv)+')';
+      g.beginPath();g.arc(cx2,cy2,5.4,0,6.29);g.fill();
+      g.strokeStyle='rgba(58,40,22,.8)';g.lineWidth=1;g.beginPath();
+      g.arc(cx2,cy2,2.6,0,6.29);g.stroke();
+      g.fillStyle='rgba(255,238,200,.16)';g.fillRect(cx2-4,cy2-5,8,1.6);
+    }
+    g.fillStyle='#4a3220';g.fillRect(4,H-38,104,3);                 // the leaning rail
+    return c;}
+  if(kind==='haystack'){                               // a stack in the corner of a croft
+    /* A symmetrical cone with a rope round it is a bell tent. A real stack is laid in
+       courses, is heavier on one side where the pitchfork pulled it, and sheds loose
+       straw at the foot, so it sits INTO the ground rather than on it. */
+    W=116;H=96;c.width=W;c.height=H;shadow(g,W,H,0.42);
+    var r4=new Rules.RNG(4242);
+    g.fillStyle='#a3823b';g.beginPath();g.moveTo(6,H-8);
+    g.bezierCurveTo(10,58,26,26,58,14);                              // windward side
+    g.bezierCurveTo(86,20,102,44,110,H-8);g.closePath();g.fill();
+    g.fillStyle='rgba(58,40,14,.32)';g.beginPath();g.moveTo(66,H-8);
+    g.bezierCurveTo(92,44,80,22,58,14);g.bezierCurveTo(78,30,86,52,92,H-8);
+    g.closePath();g.fill();
+    g.fillStyle='rgba(226,196,116,.22)';g.beginPath();g.moveTo(20,H-14);
+    g.bezierCurveTo(22,54,32,30,56,18);g.bezierCurveTo(44,34,34,60,32,H-14);
+    g.closePath();g.fill();
+    g.strokeStyle='rgba(88,64,24,.45)';g.lineWidth=1.6;             // the courses it was pitched in
+    for(var hy=H-18;hy>22;hy-=9){
+      var span=(hy-14)/(H-30);
+      g.beginPath();
+      g.moveTo(10+58*(1-Math.min(1,span)),hy);
+      g.quadraticCurveTo(58,hy-6,106-58*(1-Math.min(1,span)));
+      g.stroke();}
+    g.strokeStyle='rgba(238,212,132,.55)';g.lineWidth=1.2;          // hanging straw
+    for(var hs=0;hs<30;hs++){var hx=r4.int(12,104),hy2=r4.int(24,H-16);
+      g.beginPath();g.moveTo(hx,hy2);g.lineTo(hx+r4.int(-5,7),hy2+r4.int(6,14));g.stroke();}
+    g.fillStyle='#c19b46';                                        // the straw it shed
+    for(var sk=0;sk<26;sk++){var sx=r4.int(2,112);
+      g.fillRect(sx,H-10+r4.int(0,7),r4.int(5,14),1.6);}
+    g.fillStyle='rgba(40,28,10,.45)';g.fillRect(8,H-12,100,7);      // dark, damp foot
+    return c;}
+  if(kind==='trough'){                                 // the public water trough
+    W=112;H=46;c.width=W;c.height=H;shadow(g,W,H);
+    g.fillStyle='#7d766a';g.fillRect(8,18,96,22);
+    g.fillStyle='#948c7e';g.fillRect(8,18,96,3);
+    g.fillStyle='#5f594f';g.fillRect(8,36,96,4);
+    g.fillStyle='#a49c8c';g.beginPath();g.ellipse(56,18,48,7,0,0,6.29);g.fill();
+    g.fillStyle='#2f454e';g.beginPath();g.ellipse(56,19,42,5.4,0,0,6.29);g.fill();
+    g.fillStyle='rgba(150,186,200,.45)';g.fillRect(18,17,26,2);g.fillRect(64,20,22,1.6);
+    g.fillStyle='#6f6a5e';g.fillRect(16,38,12,8);g.fillRect(84,38,12,8);      // block feet
+    g.fillStyle='#8b8577';g.fillRect(96,8,7,14);                          // the standpipe
+    g.fillStyle='#5d5750';g.fillRect(92,12,7,3);
+    return c;}
+  if(kind==='stocks'){                                 // the punishment frame by the hall
+    W=98;H=58;c.width=W;c.height=H;shadow(g,W,H);
+    g.fillStyle='#4a3220';g.fillRect(10,16,9,34);g.fillRect(79,16,9,34);
+    g.fillStyle='#6b4a2a';g.fillRect(6,30,86,8);                        // the sill board
+    g.fillStyle='#5b3d22';g.fillRect(6,14,86,9);                        // the hinged board
+    g.fillStyle='#241a10';
+    g.beginPath();g.arc(38,23,7,0,6.29);g.fill();g.beginPath();g.arc(60,23,7,0,6.29);g.fill();
+    g.beginPath();g.arc(38,34,7,0,6.29);g.fill();g.beginPath();g.arc(60,34,7,0,6.29);g.fill();
+    g.fillStyle='#8b9098';g.fillRect(32,26,8,4);g.fillRect(58,26,8,4);    // iron cuffs
+    g.fillStyle='#7a5734';g.fillRect(6,12,86,3);
+    g.fillStyle='#3a2818';g.fillRect(44,4,10,10);                        // the hook it hangs on
+    return c;}
+  if(kind==='signpost'){                               // fingers at the crossroads
+    W=76;H=134;c.width=W;c.height=H;shadow(g,W,H,0.34);
+    g.fillStyle='#4a3220';g.fillRect(33,10,9,H-14);
+    g.fillStyle='#5f4227';g.fillRect(33,10,3,H-14);
+    g.fillStyle='#3a2818';g.beginPath();g.moveTo(29,10);g.lineTo(46,10);g.lineTo(37.5,2);
+    g.closePath();g.fill();
+    function finger(y,dir,w,txt){
+      g.save();g.translate(37,y);g.rotate(dir*0.13);
+      g.fillStyle='#6b4a26';g.fillRect(dir>0?-4:-w+4,-7,w,14);
+      g.fillStyle='#8a6631';g.fillRect(dir>0?-2:-w+6,-5,w-4,10);
+      g.fillStyle='#3a2818';
+      g.beginPath();
+      if(dir>0){g.moveTo(w-4,-7);g.lineTo(w+4,0);g.lineTo(w-4,7);}else{g.moveTo(-w+4,-7);g.lineTo(-w-4,0);g.lineTo(-w+4,7);}
+      g.closePath();g.fill();
+      g.fillStyle='rgba(50,34,16,.8)';for(var t2=0;t2<txt;t2++)g.fillRect(dir>0?2:-w+8+t2*7,-1.4,5,2.6);
+      g.restore();}
+    finger(28,1,34,3);finger(50,-1,30,2);finger(72,1,26,2);
+    g.fillStyle='rgba(70,96,54,.4)';g.fillRect(30,H-22,15,7);
+    return c;}
+  if(kind==='board'){                                  // the reeve's notice board
+    W=92;H=88;c.width=W;c.height=H;shadow(g,W,H);
+    g.fillStyle='#4a3220';g.fillRect(12,30,8,52);g.fillRect(72,30,8,52);
+    g.fillStyle='#5b3d22';g.fillRect(6,18,80,44);
+    for(var bp=8;bp<84;bp+=11){g.fillStyle='rgba(30,20,10,.45)';g.fillRect(bp,18,1.4,44);}
+    g.fillStyle='#7a5734';g.fillRect(6,18,80,4);
+    g.fillStyle='#4e3a22';g.beginPath();g.moveTo(2,18);g.lineTo(46,4);g.lineTo(90,18);
+    g.closePath();g.fill();
+    var papers=[[16,26,22,16,-0.05],[42,24,18,20,0.04],[24,46,26,12,0.02],[56,44,16,14,-0.06]];
+    for(var pi=0;pi<papers.length;pi++){
+      var P=papers[pi];g.save();g.translate(P[0]+P[2]/2,P[1]+P[3]/2);g.rotate(P[4]);
+      g.fillStyle='#d9cfae';g.fillRect(-P[2]/2,-P[3]/2,P[2],P[3]);
+      g.fillStyle='rgba(70,58,38,.6)';
+      for(var ln=1;ln<4;ln++)g.fillRect(-P[2]/2+3,-P[3]/2+3+ln*3,P[2]-6,1);
+      g.fillStyle='#8b8577';g.beginPath();g.arc(0,-P[3]/2+2,1.3,0,6.29);g.fill();
+      g.restore();}
+    return c;}
+  if(kind==='anvil'){                                  // the smith's, on a blocked stump
+    W=90;H=62;c.width=W;c.height=H;shadow(g,W,H);
+    g.fillStyle='#5b3d22';g.beginPath();g.moveTo(22,60);g.lineTo(66,60);
+    g.lineTo(62,30);g.lineTo(26,30);g.closePath();g.fill();
+    g.fillStyle='#6d4e2c';for(var ag=0;ag<3;ag++)g.fillRect(27,34+ag*8,34,2);
+    g.fillStyle='#3a332c';g.fillRect(24,28,42,5);g.fillRect(26,52,38,4);      // hooped
+    g.fillStyle='#4e545c';g.beginPath();                                      // the anvil
+    g.moveTo(28,28);g.lineTo(62,28);g.lineTo(60,20);g.lineTo(52,20);
+    g.lineTo(50,14);g.lineTo(38,14);g.lineTo(36,20);g.lineTo(28,20);g.closePath();g.fill();
+    g.fillStyle='#767d86';g.fillRect(36,13,16,3);                             // lit face
+    g.fillStyle='#3b4046';g.beginPath();g.moveTo(62,28);g.lineTo(74,24);       // the horn
+    g.lineTo(62,20);g.closePath();g.fill();
+    g.fillStyle='#22262b';g.fillRect(28,26,34,2);
+    return c;}
+  if(kind==='ladder'){                                 // left against the wall, where it belongs
+    W=62;H=124;c.width=W;c.height=H;shadow(g,W,H,0.36);
+    g.save();g.translate(30,H-6);g.rotate(-0.14);
+    g.fillStyle='#6b4a2a';g.fillRect(-18,-H+10,6,H-10);g.fillRect(8,-H+10,6,H-10);
+    g.fillStyle='#8a6631';g.fillRect(-18,-H+10,2,H-10);g.fillRect(8,-H+10,2,H-10);
+    for(var lr=0;lr<7;lr++){g.fillStyle='#5b3d22';g.fillRect(-18,-H+22+lr*16,32,5);
+      g.fillStyle='rgba(255,238,200,.12)';g.fillRect(-18,-H+22+lr*16,32,1.4);}
+    g.restore();
+    return c;}
+  if(kind==='bench'){                                  // by the fountain, in the shade
+    W=108;H=48;c.width=W;c.height=H;shadow(g,W,H);
+    g.fillStyle='#7d766a';g.fillRect(10,26,18,18);g.fillRect(80,26,18,18);     // block ends
+    g.fillStyle='#948c7e';g.fillRect(10,26,18,3);g.fillRect(80,26,18,3);
+    g.fillStyle='#5b3d22';g.fillRect(4,16,100,11);
+    g.fillStyle='#7a5734';g.fillRect(4,16,100,3);
+    g.fillStyle='rgba(30,20,10,.4)';g.fillRect(4,25,100,2);g.fillRect(38,16,1.6,11);
+    g.fillStyle='rgba(70,96,54,.4)';g.fillRect(12,40,16,5);
     return c;}
   W=52;H=52;c.width=W;c.height=H;shadow(g,W,H);
   g.fillStyle='#6b4a2a';g.fillRect(10,16,32,32);
@@ -1906,5 +2319,21 @@ function minimap(prep,seen,camX,camY,dir,opts){
 function figTex(desc,key){return sprite(key);}   // billboard cache handle
 
 return{init:init,resize:resize,prepare:prepare,render:render,minimap:minimap,
-  figTex:figTex,lastFrameMs:lastFrameMs,fit:function(){return REC;}};
+  figTex:figTex,lastFrameMs:lastFrameMs,fit:function(){return REC;},
+  texFailures:function(){buildTextures();return TEXFAIL;},
+  /* A single material, large, on the page. Judging a painter by the swatch instead of
+     by walking around a village looking for it is a different order of iteration. */
+  texSwatch:function(k){
+    buildTextures();
+    var t=TEXCACHE[k];
+    if(!t||!t.base)return 'no texture for '+k;
+    var c=document.createElement('canvas');
+    c.width=256;c.height=256;
+    var g=c.getContext('2d');
+    g.imageSmoothingEnabled=false;
+    g.drawImage(t.base,0,0,256,256);
+    document.body.innerHTML='';document.body.style.margin='0';
+    document.body.appendChild(c);
+    return 'swatch '+k+' mounted at 256px';
+  }};
 })();
