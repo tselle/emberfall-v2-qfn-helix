@@ -8,7 +8,19 @@ function bands(){if(!G.bands)G.bands=[];return G.bands;}
 function uid(){if(!G.bandSeq)G.bandSeq=1;return 'b'+(G.bandSeq++);}
 function mapId(){return Game.mapId();}
 function cell(x,y){return Game.cellAt(mapId(),x,y);}
-function passable(c){return c!=null&&c!==''&&'^~#'.indexOf(c)<0;}
+/* What a band may neither cross nor see through. The set was '^~#' alone, which let a
+   goblin stroll through a house wall and - the dearer case - through a LOCKED DOOR.
+   A band could thus come to stand "between you and violence" with a shut and bolted
+   door in the way, and a company found itself invited to stand and fight a door.
+   Overland letters are ground rather than structure (a thicket is walkable), so the
+   indoor-only walls are gated by the kind of map; a closed door blocks feet and eyes
+   wherever it stands. */
+function passable(c){
+  if(c==null||c==='')return false;
+  if('^~#L'.indexOf(c)>=0)return false;               // rock, water, and bolted doors
+  if(!wild()&&'HBTF'.indexOf(c)>=0)return false;      // a building's own walls, and its fixtures
+  return true;
+}
 function night(){return Look.isNight(G.time);}   // one definition of dark, see overland.js
 function wild(){var m=MAPS[mapId()];return !!(m&&m.overland);}
 function sightOf(b){
@@ -178,5 +190,5 @@ function forget(){seenKeys={};}
 /* wipe bands that were hunting when the party wiped */
 function scatter(keys){removeKeys(keys);}
 return{spawn:spawn,step:step,visible:visible,removeKeys:removeKeys,forget:forget,
-  scatter:scatter,clearAt:clearAt,sightOf:sightOf};
+  scatter:scatter,clearAt:clearAt,sightOf:sightOf,_passable:passable};
 })();

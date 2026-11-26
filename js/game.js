@@ -666,12 +666,20 @@ function animAngle(a0,a1,ms,done){
   frame();
 }
 function bufferCmd(fn){
+  if(UI.top())return;               // a dialog owns the screen; the step is off the table
   if(X.busy){X.pending=fn;UI.log('dim','…');return;}
   fn();
 }
 function drainPending(){
   var p=X&&X.pending;X&&(X.pending=null);
-  if(p)p();
+  if(!p)return;
+  /* The step was queued while the previous one was still in the air - and by the time
+     it came due, a dialog had opened: a band on the road, a locked door. Running it
+     then puts a SECOND prompt on top of the first, and the buttons of the prompt that
+     mattered go under the panel. The keys and the canvas click already refuse while a
+     dialog is up; the queue was the door left open. */
+  if(UI.top()){UI.log('dim','You hold, and let the moment pass.');return;}
+  p();
 }
 
 /* ============ Gates & services ============ */
