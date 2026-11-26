@@ -122,7 +122,10 @@ I('shortbow',{n:'Short Bow',t:'r',d:'1d6',bands:5,rof:2,spd:4,price:30,w:2});
 I('longbow',{n:'Long Bow',t:'r',d:'1d8',bands:6,rof:2,spd:5,price:75,w:3});
 I('dart',{n:'Elven Dart',t:'r',d:'1d3',bands:2,rof:2,spd:3,price:2,w:1});
 I('javellin',{n:'Javelin',t:'r',d:'1d6+1',bands:4,rof:2,spd:6,price:1,w:2});
-I('arrow',{n:'Arrows (12)',t:'r',ammo:1,d:'0',price:1,w:1});
+/* Ammo. `ammo:1` marks it as consumption, never as a weapon; `pieces` is what
+   one pack holds, and a spent round re-stores the quiver as 'arrow#7'. */
+I('arrow',{n:'Arrows (12)',t:'r',ammo:1,d:'0',pieces:12,price:1,w:1});
+I('bullet',{n:'Sling Bullets (12)',t:'r',ammo:1,d:'0',pieces:12,price:1,w:2});
 /* Armor & shields */
 I('leather',{n:'Leather Armor',t:'a',ac:8,price:5,w:15});
 I('studded',{n:'Studded Leather',t:'a',ac:7,price:20,w:20});
@@ -394,7 +397,7 @@ QUESTS.gnolls={name:'The Bloodmane Pack',lead:'Gnells out of the Greywater watch
 
 /* ================= Shops ================= */
 SHOPS.armory={name:'Ironhand Outfitters',kind:'armory',
-  stock:['club','dagger','staff','mace','warhammer','shortsword','longsword','broadsword','bastardsword','twohandsword','handaxe','battleaxe','spear','falchion','flail','sling','shortbow','longbow','dart','javellin','arrow','leather','studded','chain','banded','plate','shield','backpack','bedroll','rations','waterskin','rope','torch','lantern','oil','spikes','mirror','thtools']};
+  stock:['club','dagger','staff','mace','warhammer','shortsword','longsword','broadsword','bastardsword','twohandsword','handaxe','battleaxe','spear','falchion','flail','sling','shortbow','longbow','dart','javellin','arrow','bullet','leather','studded','chain','banded','plate','shield','backpack','bedroll','rations','waterskin','rope','torch','lantern','oil','spikes','mirror','thtools']};
 SHOPS.apothecary={name:'The Gilded Mortar',kind:'apothecary',
   stock:['oilflat','potioncure','antivenom','holy','silveredclub','silvermace']};
 SHOPS.general={name:'The Drowsy Lantern larder',kind:'general',
@@ -426,6 +429,11 @@ var item=function(id){
     return sp?{id:id,n:'Scroll: '+sp.name,t:'x',spell:base.slice(7),price:100,desc:'Read to cast '+sp.name+'. '+(sp.desc||'')}:null;
   }
   var d=ITEMS[base];
+  if(d&&d.pieces&&!d.charges){
+    var shot=parts.length>1?+parts[1]:d.pieces;
+    if(shot<=0)return null;
+    return Object.assign({},d,{id:id,piecesLeft:shot});
+  }
   if(d&&d.charges){
     var left=parts.length>1?+parts[1]:d.charges;
     if(left<=0)return null;
@@ -450,7 +458,7 @@ PREGENS=[
  {id:'pg_borin',name:'Borin Stonehand',race:'D',cls:'C',align:'NG',color:'#b07b4a',
   scores:{str:16,dex:12,con:18,int:10,wis:16,cha:10},strx:0,lvl:1,xp:0,
   eq:{melee:'mace',missile:'sling',armor:'chain',shield:'shield'},
-  inv:['holy','backpack','rations','waterskin']},
+  inv:['holy','bullet','backpack','rations','waterskin']},
  {id:'pg_lyra',name:'Lyra Windwhisper',race:'HE',cls:'R',align:'NG',color:'#5f9e66',spec:'goblins',
   scores:{str:14,dex:15,con:14,int:11,wis:14,cha:12},strx:0,lvl:1,xp:0,
   eq:{melee:'longsword',missile:'longbow',armor:'studded'},
@@ -458,9 +466,9 @@ PREGENS=[
  {id:'pg_pip',name:'Pip Quickfinger',race:'HL',cls:'T',align:'CN',color:'#4fb3a9',
   scores:{str:8,dex:18,con:13,int:12,wis:10,cha:13},strx:0,lvl:1,xp:0,
   eq:{melee:'shortsword',missile:'sling',armor:'leather'},
-  inv:['thtools','backpack','rations','waterskin']},
+  inv:['thtools','bullet','backpack','rations','waterskin']},
  {id:'pg_elowen',name:'Elowen Starfall',race:'E',cls:'M',align:'CG',color:'#b7a6e8',
   scores:{str:8,dex:14,con:12,int:16,wis:11,cha:13},strx:0,lvl:1,xp:0,
   eq:{melee:'staff',missile:'dart'},
-  inv:['backpack','rations','waterskin','dagger'],
+  inv:['dart','dart','backpack','rations','waterskin','dagger'],
   book:['mmissile','sleep','armor','burnhands','shield'],prep:{mmissile:1},mem:{mmissile:1}}];

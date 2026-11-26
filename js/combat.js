@@ -312,14 +312,65 @@ function losFree(x0,y0,x1,y1){
 
 /* ================= PC actions ================= */
 function weapon(c){var it=item(c.eq&&c.eq.melee);return it&&it.t==='w'?it:null;}
+/* A launcher, never a consumable: an arrow in the pack is not a weapon, and
+   neither is an arrow mistakenly shoved into the missile slot. */
 function missileWeapon(c){
-  if(c.eq&&c.eq.missile){var it=item(c.eq.missile);if(it)return it;}
-  var id=(c.inv||[]).find(function(i){var t=item(i);return t&&t.t==='r';});
+  var eq=item(c.eq&&c.eq.missile);
+  if(eq&&eq.t==='r'&&!eq.ammo)return eq;
+  var id=(c.inv||[]).find(function(i){var t=item(i);return t&&t.t==='r'&&!t.ammo;});
   return id?item(id):null;
 }
+/* What one shot costs. Bows feed on arrows, slings on bullets; a thrown weapon
+   is its own ammunition and leaves the pack for good. */
+function ammoFor(it){
+  if(!it)return null;
+  if(it.id.indexOf('bow')>=0)return 'arrow';
+  if(it.id==='sling')return 'bullet';
+  if(it.id==='dart'||it.id==='javellin'||it.thrown)return it.id;
+  return it.ammo?'arrow':null;
+}
+function ammoBase(id){return String(id).split('#')[0];}
+function ammoLeft(c,it){
+  var base=ammoFor(it);if(!base)return 0;
+  var pool=(c.inv||[]).slice();
+  if(c.eq&&c.eq.missile)pool.push(c.eq.missile);
+  var n=0;
+  pool.forEach(function(id){
+    if(ammoBase(id)!==base)return;
+    var inst=item(id);
+    n+=(inst&&inst.piecesLeft!=null)?inst.piecesLeft:((item(base)||{}).pieces||1);
+  });
+  return n;
+}
+/* Spend one round. A counted quiver re-stores itself as 'arrow#7'; a thrown
+   weapon loses one item, and the last of them may come off the shoulder. */
+function spendAmmo(c,it){
+  var base=ammoFor(it);if(!base)return true;
+  var pool=c.inv||[],i;
+  for(i=0;i<pool.length;i++){
+    if(ammoBase(pool[i])!==base)continue;
+    if(base===it.id){pool.splice(i,1);return true;}
+    var parts=String(pool[i]).split('#');
+    var left=parts.length>1?+parts[1]:((item(base)||{}).pieces||1);
+    if(left-1<=0)pool.splice(i,1);else pool[i]=base+'#'+(left-1);
+    return true;
+  }
+  if(base===it.id&&c.eq&&c.eq.missile&&ammoBase(c.eq.missile)===base){
+    c.eq.missile=null;
+    logEvent('The last '+(it.n||'').toLowerCase()+' leaves your hand.');
+    return true;
+  }
+  return false;
+}
 function hasAmmo(c,it){
-  if(!it||it.id.indexOf('bow')<0)return true;   // darts/sling: self-contained
-  return (c.inv||[]).indexOf('arrow')>=0;
+  if(!it)return false;
+  var base=ammoFor(it);
+  if(!base)return true;                     // a launcher with nothing to spend
+  return ammoLeft(c,it)>0;
+}
+/* Foes within arm's reach: you may not shoot past them. */
+function foesAtHand(u){
+  return CB.mons.filter(function(m){return standing(m)&&dist8(u,m)<=1;});
 }
 function strOf(c){return Rules.strOf(c);}
 function buildCommands(u){
@@ -343,8 +394,13 @@ function buildCommands(u){
   var c=u.c;
   cmd('⚔ Attack',function(){arm({kind:'attack'});hint.textContent='Click a foe to fall on it — distance will be crossed if your feet can manage it.';});
   var mw=missileWeapon(c);
-  cmd('➹ Shoot',function(){arm({kind:'shoot'});hint.textContent='Click a foe in range with clear line.';},
-    !(mw&&hasAmmo(c))||c.lvl<1,mw?'':'No missile weapon equipped or carried'+(mw&&!hasAmmo(c)?' (no arrows)':''));
+  cmd('➹ Shoot',function(){arm({kind:'shoot'});
+    var rf=Rules.missileROF(c,mw),rr=Rules.missileRange(mw);
+    hint.textContent=mw.n+' \u2014 '+rf+' shot'+(rf>1?'s':'')+' to '+rr+' paces: clean to '
+      +Math.round(rr/3)+', \u22122 to '+Math.round(rr*2/3)+', \u22125 beyond.';
+  },!(mw&&hasAmmo(c,mw))||c.lvl<1,
+    mw?(hasAmmo(c,mw)?'':'Out of '+(ammoFor(mw)==='arrow'?'arrows':ammoFor(mw)==='bullet'?'bullets':'ammunition'))
+      :'No missile weapon equipped or carried');
   var casts=casterSpells(c);
   cmd('✦ Spell',function(){spellMenu(u,casts);},!casts.length,!casts.length?'Nothing memorized for battle':undefined);
   if(c.cls==='C')cmd('☩ Turn',function(){turnUndead(u);},
@@ -429,23 +485,28 @@ function swing(u,m,opts,first){
 function pcShoot(u,m){
   var c=u.c,mw=missileWeapon(c);
   if(!mw)return;
-  var rng=mw.id.indexOf('longbow')>=0?10:mw.id.indexOf('shortbow')>=0?7:5;
-  if(dist8(u,m)>rng||!losFree(u.x,u.y,m.x,m.y)){UI.toast('No clean line — or beyond bolt range.');return;}
-  if(mw.id.indexOf('bow')>=0){
-    var j=(c.inv||[]).indexOf('arrow');if(j>=0)c.inv.splice(j,1);
-  }
-  var n=Rules.missileROF(c);
+  var d=dist8(u,m),shot=Rules.missileBand(mw,d);
+  if(shot.mod===null){UI.toast(d+' paces off; '+mw.n.toLowerCase()+' carries '+shot.range+'.');return;}
+  if(!losFree(u.x,u.y,m.x,m.y)){UI.toast('No clean line.');return;}
+  if(d>1&&foesAtHand(u).length){UI.toast('Something has hold of you — shoot what touches you.');return;}
+  if(!hasAmmo(c,mw)){UI.toast('Out of '+(ammoFor(mw)==='arrow'?'arrows':ammoFor(mw)==='bullet'?'bullets':'ammunition')+'.');return;}
+  /* DEX governs the missile hand; the range band takes off what it gives. */
+  var bonus=Rules.dexOf(c).missile+shot.mod;
+  if(u.fx){if(u.fx.bless>0)bonus+=1;if(u.fx.prayer>0)bonus+=1;}
+  var n=Rules.missileROF(c,mw,{haste:!!(u.fx&&u.fx.haste>0)});
   for(var a=0;a<n;a++){
     if(!CB||CB.done||!standing(m))break;
+    if(!spendAmmo(c,mw)){logEvent(c.name+' reaches for another shot and finds the pack empty.');break;}
     m.seen=true;
-    var res=Rules.toHitRoll(c,m.ac,0);
+    var res=Rules.toHitRoll(c,m.ac,bonus);
     if(res.hit){
       var dmg=Rules.dice(mw.d||'1d8');
       m.hp-=dmg;
       fxTracer(u.x,u.y,m.x,m.y,'#d8c7a8');fxNum(m.x,m.y,'-'+dmg,'#ff9d76',14,(a-1)*20);
       fxBurst(m.x,m.y,'#b0714f');
-      logEvent(c.name+' puts a shaft in '+m.name+' ('+dmg+').');
-    }else logEvent(c.name+"'s shot goes wide.");
+      logEvent(c.name+': shaft in '+m.name+' from '+d+' paces ('+shot.label+', '
+        +(bonus>=0?'+':'')+bonus+') for '+dmg+'.');
+    }else logEvent(c.name+"'s "+shot.label+' shot falls short.');
     if(m.hp<=0){killMon(m);break;}
   }
   draw();winCheck();
@@ -1219,5 +1280,6 @@ function autoAct(){
 }
 return{start:start,isActive:isActive,onKey:onKey,init:init,resize:resize,autoAct:autoAct,__build:function(u){buildCommands(u);},_move:function(u,tx,ty){CB.turn=u;CB.moveSet=moveSet(u);return doMove(u,tx,ty);},
   _turn:function(){return CB&&CB.turn;},_cb:function(){return CB;},
+  _shoot:function(u,m){pcShoot(u,m);},
   _clear:function(){if(CB&&CB.done)CB=null;}};
 })();

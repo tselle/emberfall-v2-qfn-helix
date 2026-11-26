@@ -209,8 +209,33 @@ function attacksPerRound(char,round,weaponFamily){
 function specAdj(char,weaponFamily){
   return (char&&char.cls==='F'&&char.spec&&weaponFamily&&weaponFamily===char.spec)?1:0;
 }
-/* Missile rate of fire: 1 per round for most, 2 for bows at high level kept simple: 1. */
-function missileROF(char){return (char.cls==='F'||char.cls==='P'||char.cls==='R')&&char.lvl>=7?2:1;}
+/* Missile rate of fire. The WEAPON sets the base: a sling is one cast a round,
+   a bow two, a javelin two (see `rof` in data.js). Everything else is a
+   modifier stacked on that base, never a replacement for it:
+     +1  warrior mastery (F/P/R) from 7th level — a loading drill learned by
+         hand, which is why a sling-caster still only gains one extra cast
+     ×2  haste
+   Engagement does not slow the hand; it limits whom you may aim at (a foe at
+   the hand forbids shots past it, see combat's Shoot gate), because the rules
+   forbid shooting over an adjacent foe rather than making it merely hard. */
+function missileROF(char,weapon,opts){
+  opts=opts||{};
+  var n=(weapon&&weapon.rof)?weapon.rof:1;
+  if((char.cls==='F'||char.cls==='P'||char.cls==='R')&&char.lvl>=7)n+=1;
+  if(opts.haste)n*=2;
+  return Math.max(1,n);
+}
+/* Missile range: data `bands` counts 30-ft units and a board square is 10 ft,
+   so a weapon carries bands*3 squares. Split into three thirds, and the shot
+   takes the classic 0 / -2 / -5 to-hit penalty by band. */
+function missileRange(weapon){return ((weapon&&weapon.bands)?weapon.bands:3)*3;}
+function missileBand(weapon,dist){
+  var full=missileRange(weapon),t1=Math.max(1,Math.round(full/3)),t2=Math.max(2,Math.round(full*2/3));
+  if(dist<=t1)return{band:1,label:'point blank',mod:0,range:full};
+  if(dist<=t2)return{band:2,label:'short',mod:-2,range:full};
+  if(dist<=full)return{band:3,label:'long',mod:-5,range:full};
+  return{band:0,label:'out of range',mod:null,range:full};
+}
 
 /* Spell slots: rings 1..9 per caster level (base only; bonuses added below). */
 var MAGE_SLOTS=[[1],[2],[2,1],[3,2],[4,2,1],[4,3,2],[4,3,2,1],[4,3,3,2],
@@ -407,6 +432,7 @@ return{
   RACES:RACES,CLASSES:CLASSES,XPT:XPT,KIT_LEVELS:KIT_LEVELS,KIT_GOLD:KIT_GOLD,
   SAVE_NAMES:SAVE_NAMES,saveTargets:saveTargets,THAC0:THAC0,
   attacksPerRound:attacksPerRound,specAdj:specAdj,missileROF:missileROF,
+  missileRange:missileRange,missileBand:missileBand,
   MAGE_SLOTS:MAGE_SLOTS,PRIEST_SLOTS:PRIEST_SLOTS,slotsFor:slotsFor,maxRing:maxRing,bonusSlots:bonusSlots,
   rollScores:rollScores,genScores:genScores,rollClassGold:rollClassGold,rollHP:rollHP,firstLevelHP:firstLevelHP,pcStrength:pcStrength,
   abilityScore:abilityScore,strOf:strOf,dexOf:dexOf,conOf:conOf,intOf:intOf,wisOf:wisOf,chaOf:chaOf,

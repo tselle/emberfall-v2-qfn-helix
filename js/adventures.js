@@ -442,7 +442,7 @@ var REGION_HINT='';
 function genShops(t){
   var arm={name:'the band forge',stock:['club','dagger','staff','mace','sling','dart','leather']};
   if(t>=1)arm.stock=arm.stock.concat(['shortsword','handaxe','spear','chain','shield','backpack','rope','torch','oil','rations','waterskin']);
-  if(t>=2)arm.stock.push('warhammer','flail','studded','longbow','arrow');
+  if(t>=2)arm.stock.push('warhammer','flail','studded','longbow','arrow','bullet');
   if(t>=3)arm.stock.push('broadsword','battleaxe','splint');
   if(t>=4)arm.stock.push('bastardsword','banded','plate');
   if(t>=5)arm.stock.push('twohandsword','halberd');

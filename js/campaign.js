@@ -170,6 +170,9 @@ function materializeStarter(c,rng){
     else if(c.cls==='C'){c.eq.melee='mace';c.eq.armor='chain';c.eq.shield='shield';}
     else if(c.cls==='T'){c.eq.melee='shortsword';c.eq.armor='leather';}
     else if(c.cls==='M'){c.eq.melee='staff';c.eq.missile='dart';
+      /* A thrown weapon is its own ammunition: a launcher with nothing to spend
+         is scenery, so the starter carries a few darts besides the one held. */
+      c.inv=(c.inv||[]);c.inv.push('dart','dart');
       c.book=['mmissile','sleep','armor','burnhands','shield'];c.prep={mmissile:1};c.mem={mmissile:1};}
   }
 }

@@ -964,6 +964,7 @@ function equip(c,id){
   var it=item(id);if(!it)return;
   if(c.inv.indexOf(id)<0)return;
   if(it.t==='q'){UI.toast('That must stay carried, not worn.');return;}
+  if(it.ammo){UI.toast('Ammunition is spent from the pack, not worn.');return;}
   var slot=it.t==='w'?'melee':it.t==='r'?'missile':it.t==='a'?'armor':it.t==='s'?'shield':'charm';
   if(it.t==='w'&&c.cls==='M'&&['dagger','staff','dart','sling'].indexOf(id.indexOf('#')>0?id.split('#')[0]:id)<0){UI.toast('Mages take that warily.');return;}
   var prev=c.eq[slot];

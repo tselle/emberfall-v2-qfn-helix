@@ -192,8 +192,10 @@ function sheet(c){
   rows.push(['Equipped',eqRows]);
   var inv=(c.inv||[]).map(function(id){var it=item(id);return it?'<div class=item><span>'+esc(it.n)+
     (it.chargesLeft!=null?' <span class=muted>'+it.chargesLeft+' chr</span>':'')+
+    (it.pieces!=null?' <span class=muted>'+(it.piecesLeft!=null?it.piecesLeft:it.pieces)+' of '+it.pieces+' left</span>':'')+
     '</span><span class="acts">'+
-    (it.t==='w'||it.t==='a'||it.t==='s'||it.t==='r'||it.t==='g'?'<button data-eq="'+c.id+'|'+id+'" title="'+esc(it.n)+' — equip and ready it">Wear</button>':'')+
+    /* Ammo is spent, not worn: an arrow in the missile slot is a mistake waiting. */
+    ((it.t==='w'||it.t==='a'||it.t==='s'||it.t==='r'||it.t==='g')&&!it.ammo?'<button data-eq="'+c.id+'|'+id+'" title="'+esc(it.n)+' — equip and ready it">Wear</button>':'')+
     (it.t==='p'||it.t==='x'||it.t==='d'?'<button data-use="'+c.id+'|'+id+'" title="'+esc(it.n)+' — drink, read or trigger it now">Use</button>':'')+
     (it.t==='q'?'':'<button data-drop="'+c.id+'|'+id+'" title="'+esc(it.n)+' — leave it in the pack pile">Drop</button>')+'</span></div>':'';}).join('')||'<span class=muted>Empty pack</span>';
   // Mage spellbook: re-prepare choices freely — ready (mem) copies never move until rest.

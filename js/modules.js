@@ -423,9 +423,9 @@ QUESTS.rav_patrol={name:'Twelve Badges',lead:'The fort\u2019s last patrol went o
 SHOPS.hesk={name:'Hesk\u2019s General Goods',kind:'general',
   stock:['club','dagger','staff','mace','sling','dart','shortbow','leather','backpack','bedroll','rations','waterskin','rope','torch','lantern','oil','spikes','thtools','potioncure','antivenom']};
 SHOPS.dunmore={name:'Dunmore\u2019s Forge',kind:'armory',
-  stock:['club','dagger','mace','warhammer','shortsword','longsword','broadsword','battleaxe','spear','flail','sling','shortbow','longbow','arrow','dart','leather','studded','chain','banded','shield','silveredclub','silvermace','silverlongsword','silveredshield','rations','rope','torch','lantern']};
+  stock:['club','dagger','mace','warhammer','shortsword','longsword','broadsword','battleaxe','spear','flail','sling','shortbow','longbow','arrow','bullet','dart','leather','studded','chain','banded','shield','silveredclub','silvermace','silverlongsword','silveredshield','rations','rope','torch','lantern']};
 SHOPS.ravel={name:'Quartermaster\u2019s Stores',kind:'armory',
-  stock:['dagger','mace','warhammer','shortsword','longsword','spear','handaxe','sling','shortbow','longbow','arrow','dart','javellin','leather','studded','chain','shield','holy','rations','waterskin','rope','torch','lantern','oil','potioncure','antivenom']};
+  stock:['dagger','mace','warhammer','shortsword','longsword','spear','handaxe','sling','shortbow','longbow','arrow','bullet','dart','javellin','leather','studded','chain','shield','holy','rations','waterskin','rope','torch','lantern','oil','potioncure','antivenom']};
 
 /* ================= Rumors ================= */
 RUMORS.thorn=[
