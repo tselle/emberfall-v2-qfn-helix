@@ -164,6 +164,9 @@ function drawFig(ctx,desc,x,y,s){
         if(desc.weapon==='staff'){ell(6.6,-27,2,2,acc);}
       }
   }
+  /* The company's kit goes over the shared silhouette - arms, mail, helm, shield,
+     weapon. Creatures carry no `kit` and are drawn exactly as before. */
+  if(desc.kit&&PERSON[shape])drawKit(ctx,desc,shape);
   if(desc.marks&&desc.marks.length)drawMarks(ctx,desc,shape,col,acc,lit);
   if(desc.leader)regalia(ctx,shape);
   ctx.restore();
@@ -380,19 +383,314 @@ function inBoxAnim(ctx,desc,cx,cy,hpx,frame){
 }
 
 var RACE_SHAPE={H:'humanoid',D:'dwarf',E:'elf',HE:'elf',HL:'halfling',HF:'halfling',G:'humanoid',O:'humanoid',HN:'humanoid'};
+
+/* ================= the company =================
+   Six adventurers used to be the same tunic silhouette in six hues with a grey
+   stick for a weapon, which is how a fighter, a paladin and a mage came to be
+   indistinguishable at the size a roster row allows. What separates a level-1
+   company is its KIT: mail or plate, nasal or great helm, round or kite shield,
+   sword, mace, bow or staff. So the kit is drawn, and the character's own colour
+   becomes LIVERY - surcoat, shield face, trim - instead of the whole body.
+   Only descriptions carrying a `kit` take this path, so the 251 creatures are
+   exactly as they were. */
+var FIG_W=25;                    // widest reach of a kit-bearer, in design units
+var PERSON={
+  humanoid:{sh:-16.4,waist:-8.6,hip:-7.2,shx:5.0,arm:8.4,hx:0,hy:-21,hw:4.4},
+  dwarf:   {sh:-13.4,waist:-5.4,hip:-4.4,shx:6.6,arm:6.2,hx:0,hy:-19.4,hw:6.0},
+  elf:     {sh:-19.6,waist:-9.6,hip:-8.2,shx:5.4,arm:9.2,hx:0,hy:-25,hw:5.0},
+  highelf: {sh:-19.6,waist:-9.6,hip:-8.2,shx:5.4,arm:9.2,hx:0,hy:-25,hw:5.0},
+  halfling:{sh:-11.2,waist:-4.6,hip:-3.8,shx:5.8,arm:5.6,hx:0,hy:-15.4,hw:5.0}
+};
+var CLASS_KIT={
+  F:{garb:'#7b828d',armour:'mail',helm:'nasal',shield:'round',weapon:'sword'},
+  P:{garb:'#969ca7',armour:'plate',helm:'great',shield:'kite',weapon:'sword',holy:1},
+  C:{garb:'#b3ab9b',armour:'leather',helm:'coif',shield:'round',weapon:'mace',holy:1},
+  R:{garb:'#5d6b4c',armour:'studded',helm:'hood',shield:'buckler',weapon:'bow'},
+  T:{garb:'#4b4d55',armour:'leather',helm:'hood',shield:'buckler',weapon:'dagger',cloak:1},
+  M:{garb:'#5f5680',armour:'cloth',helm:'wizard',weapon:'staff'}
+};
+/* What the sheet actually carries beats what the class usually buys. */
+var WEAPON_ART={longsword:'sword',broadsword:'sword',shortsword:'sword',scimitar:'sword',
+  greatsword:'sword',battleaxe:'axe',axe:'axe',handaxe:'axe',mace:'mace',morningstar:'mace',
+  flail:'mace',warhammer:'hammer',spear:'spear',lance:'spear',longbow:'bow',shortbow:'bow',
+  staff:'staff',quarterstaff:'staff',dagger:'dagger',knife:'dagger'};
+var SKIN={H:'#c79b73',HE:'#cfa87f',E:'#dcc3a2',D:'#c1906a',HL:'#cba277',HF:'#c9a06e',
+  G:'#8fae86',O:'#93a883',HN:'#c79b73'};
+var HAIR=['#3b2a1a','#5b3d22','#7a5a34','#241d18','#8a6a3a'];
+
 function figForChar(c){
-  var w=null;
-  if(c){
-    if(c.cls==='M')w='staff';
-    else if(c.cls==='T')w='dagger';
-    else if(c.eq&&c.eq.melee)w='blade';
-  }
+  var cls=(c&&c.cls)||'F',base=CLASS_KIT[cls]||CLASS_KIT.F;
+  var kit={armour:base.armour,helm:base.helm,shield:base.shield,weapon:base.weapon,
+           holy:base.holy,cloak:base.cloak};
+  var w=WEAPON_ART[c&&c.eq&&c.eq.melee];
+  if(!w&&c&&c.eq&&c.eq.missile&&c.eq.missile.indexOf('bow')>0)w='bow';
+  if(w)kit.weapon=w;
+  kit.garb=base.garb;
   return{shape:RACE_SHAPE[(c&&c.race)||'H']||'humanoid',
-    color:(c&&c.color)||'#8888aa',
-    accent:(c&&({F:'#c2502c',P:'#e3b54a',C:'#b07b4a',R:'#5f9e66',T:'#4fb3a9',M:'#b7a6e8'})[c.cls])||'#666',
-    weapon:w,race:c&&c.race,cls:c&&c.cls};
+    color:base.garb,                    // what they are wearing
+    accent:(c&&c.color)||'#8888aa',     // their own colours: livery, not flesh
+    skin:SKIN[(c&&c.race)||'H']||'#c79b73',
+    hair:HAIR[hashId(c&&c.id)%HAIR.length],
+    kit:kit,race:c&&c.race,cls:cls,lvl:c&&c.lvl};
 }
 
+/* Arms, mail, helms, shields and weapons, anchored to the same head the base
+   painter already drew - marks and regalia hang off those anchors, so moving a
+   head would slide a horn off a gnoll. */
+function drawKit(ctx,desc,shape){
+  var p=PERSON[shape];if(!p)return;
+  var kit=desc.kit||{},col=desc.color,acc=desc.accent||shade(col,30);
+  var skin=desc.skin||'#c79b73',hair=desc.hair||'#3b2a1a';
+  var steel='#aeb5c0',steelD='#6d737d',iron='#4d525a',leather='#6a4a2c',
+      leatherD='#4a3320',wood='#7a5a34',gold='#e3b54a';
+  var tier=kit.armour||'cloth';
+  function ell(cx,cy,rx,ry,c){ctx.fillStyle=c;ctx.beginPath();ctx.ellipse(cx,cy,rx,ry,0,0,6.29);ctx.fill();}
+  function bar(x,y,w,h,c){ctx.fillStyle=c;ctx.fillRect(x,y,w,h);}
+  function seg(x0,y0,x1,y1,w,c){ctx.strokeStyle=c;ctx.lineWidth=w;ctx.lineCap='round';
+    ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1,y1);ctx.stroke();}
+  function quad(a,b,c2,d2,f){ctx.fillStyle=f;ctx.beginPath();ctx.moveTo(a[0],a[1]);
+    ctx.lineTo(b[0],b[1]);ctx.lineTo(c2[0],c2[1]);ctx.lineTo(d2[0],d2[1]);ctx.closePath();ctx.fill();}
+  var dark=shade(col,-22),litA=shade(col,26);
+  var shX=p.shx,hy=p.hy,hw=p.hw;
+
+  /* --- legs: boots for everyone, greaves for the armoured --- */
+  var lx=shX*0.62;
+  if(tier==='plate'||tier==='mail'){
+    seg(-lx,-6.6,-lx-0.4,-2.2,3.6,tier==='plate'?steel:steelD);
+    seg(lx,-6.6,lx+0.4,-2.2,3.6,tier==='plate'?shade(steel,-8):shade(steelD,-6));
+  }
+  ell(-lx-0.5,-1.7,2.7,1.7,leatherD);ell(lx+0.5,-1.7,2.7,1.7,leatherD);
+  bar(-lx-3.0,-2.4,5.2,1.5,leather);bar(lx-2.2,-2.4,5.2,1.5,shade(leather,10));
+
+  /* --- the livery: a surcoat or tabard down the middle of the man --- */
+  quad([-hw*0.92,p.sh+0.6],[hw*0.92,p.sh+0.6],[hw*1.02,p.waist+1.6],[-hw*1.02,p.waist+1.6],acc);
+  quad([-hw*0.42,p.sh+0.6],[hw*0.42,p.sh+0.6],[hw*0.5,p.waist+1.2],[-hw*0.5,p.waist+1.2],
+       shade(acc,20));
+
+  /* --- the armour below the belt --- */
+  if(tier==='mail'){
+    quad([-hw*1.06,p.waist],[hw*1.06,p.waist],[hw*1.24,p.hip+2.6],[-hw*1.24,p.hip+2.6],steelD);
+    for(var mi=0;mi<3;mi++)for(var mj=-2;mj<3;mj++)
+      ell(mj*1.7,p.waist+1.1+mi*1.7,0.5,0.5,shade(steelD,26));
+  }else if(tier==='plate'){
+    quad([-hw*1.04,p.waist],[hw*1.04,p.waist],[hw*1.18,p.hip+2.2],[-hw*1.18,p.hip+2.2],steel);
+    bar(-hw*1.16,p.waist+1.6,hw*2.32,1.2,steelD);
+    bar(-hw*1.16,p.waist+3.4,hw*2.32,1.2,steelD);
+  }else if(tier==='studded'){
+    quad([-hw*1.02,p.waist],[hw*1.02,p.waist],[hw*1.14,p.hip+1.8],[-hw*1.14,p.hip+1.8],leather);
+    for(var si=-2;si<3;si++)ell(si*1.9,p.waist+2.0,0.62,0.62,shade(leather,40));
+  }else if(tier==='cloth'){
+    quad([-hw*1.1,p.waist],[hw*1.1,p.waist],[hw*1.5,-0.6],[-hw*1.5,-0.6],col);
+    for(var fi=-1;fi<2;fi++)seg(fi*2.6,p.waist+1,fi*3.4,-1,0.9,dark);
+    bar(-hw*1.5,-1.6,hw*3.0,1.6,shade(col,18));
+  }else{                                   /* leather */
+    quad([-hw*1.0,p.waist],[hw*1.0,p.waist],[hw*1.1,p.hip+1.4],[-hw*1.1,p.hip+1.4],leather);
+  }
+  bar(-hw*1.1,p.waist-1.4,hw*2.2,1.8,tier==='plate'?steelD:leatherD);
+  bar(-1.1,p.waist-1.6,2.2,2.2,tier==='plate'?gold:shade(leather,24));   // buckle
+
+  /* --- arms: the shield arm cantileers out, the weapon arm holds its ground --- */
+  var shHand=[-shX-2.4,p.waist+0.4],wHand=[shX+1.8,p.waist+0.2];
+  seg(-shX+0.8,p.sh+1.0,shHand[0]+0.4,shHand[1]-2.2,2.5,dark);
+  seg(shX-0.8,p.sh+1.0,wHand[0]-0.2,wHand[1]-2.4,2.5,litA);
+  if(tier==='mail'||tier==='plate'){
+    seg(-shX+0.6,p.sh+1.6,shHand[0]+0.2,shHand[1]-2.8,3.0,tier==='plate'?steel:steelD);
+    seg(shX-0.6,p.sh+1.6,wHand[0]-0.1,wHand[1]-3.0,3.0,tier==='plate'?shade(steel,-6):steelD);
+  }else if(tier!=='cloth'){
+    seg(-shX+0.7,p.sh+2.4,shHand[0]+0.3,shHand[1]-2.0,2.6,leather);
+    seg(shX-0.7,p.sh+2.4,wHand[0]-0.1,wHand[1]-2.2,2.6,leather);
+  }
+  if(tier==='plate'||tier==='mail'){
+    ell(-shX+0.4,p.sh+0.8,3.0,2.3,tier==='plate'?steel:steelD);
+    ell(shX-0.4,p.sh+0.8,3.0,2.3,tier==='plate'?shade(steel,-8):shade(steelD,-4));
+  }
+  ell(shHand[0],shHand[1],1.5,1.4,skin);ell(wHand[0],wHand[1],1.5,1.4,skin);
+
+  /* --- a cloak, if the trade warrants one --- */
+  if(kit.cloak){
+    quad([-shX-0.4,p.sh-0.4],[shX+0.4,p.sh-0.4],[shX+2.4,-0.6],[-shX-2.4,-0.6],dark);
+    ell(0,p.sh-0.6,1.5,1.3,gold);
+  }
+
+  /* --- the face: the base painter left a helmet-coloured blank where a person
+     should be, so put flesh and an eye line in before the helm covers the top --- */
+  ell(p.hx,hy+0.5,hw*0.84,hw*0.92,skin);
+  ell(p.hx,hy-hw*0.42,hw*0.72,hw*0.42,hair);                 // hairline
+  ell(p.hx-hw*0.34,hy+0.6,0.62,0.72,'#1d1a20');
+  ell(p.hx+hw*0.34,hy+0.6,0.62,0.72,'#1d1a20');
+  seg(p.hx,hy+1.7,p.hx,hy+2.4,0.55,shade(skin,-26));
+
+  /* --- helms --- */
+  var hr=hw*1.02;
+  if(kit.helm==='nasal'){
+    ctx.fillStyle=steel;ctx.beginPath();
+    ctx.arc(p.hx,hy-0.4,hr,Math.PI,0);ctx.closePath();ctx.fill();
+    bar(p.hx-hr,hy-0.6,hr*2,1.5,shade(steel,-16));
+    bar(p.hx-0.6,hy-0.2,1.2,hr*1.35,shade(steel,12));         // the nasal
+    bar(p.hx-hr*0.9,hy+hr*0.72,hr*1.8,1.6,steelD);            // neck guard
+    seg(p.hx-hr*0.55,hy-hr*0.72,p.hx+hr*0.2,hy-hr*0.86,0.8,shade(steel,38));
+  }else if(kit.helm==='great'){
+    bar(p.hx-hr,hy-hr*1.05,hr*2,hr*2.05,steel);
+    bar(p.hx-hr,hy-hr*1.05,hr*2,1.6,shade(steel,24));
+    bar(p.hx-hr,hy+hr*0.5,hr*2,1.5,steelD);
+    bar(p.hx-hr*0.78,hy+0.1,hr*1.56,1.25,iron);               // visor slit
+    bar(p.hx-0.55,hy-0.4,1.1,2.6,iron);
+    for(var gi=0;gi<3;gi++)bar(p.hx+hr*0.34,hy+1.6+gi*1.3,1.0,0.7,iron);  // breaths
+    bar(p.hx-hr,hy-hr*0.2,1.4,hr*1.2,shade(steel,18));
+  }else if(kit.helm==='coif'){
+    ctx.fillStyle=steelD;ctx.beginPath();
+    ctx.arc(p.hx,hy-0.2,hr,Math.PI,0.06);ctx.closePath();ctx.fill();
+    for(var ci=0;ci<7;ci++)ell(-hr*0.8+ci*hr*0.27,hy-hr*0.55,0.42,0.42,shade(steel,24));
+    bar(p.hx-hr*0.9,hy+hr*0.62,hr*1.8,1.5,steelD);
+  }else if(kit.helm==='hood'){
+    ctx.fillStyle=shade(col,-10);ctx.beginPath();
+    ctx.moveTo(p.hx-hr*1.14,hy+hr*0.9);ctx.quadraticCurveTo(p.hx-hr*1.2,hy-hr*1.5,
+      p.hx+hr*0.2,hy-hr*1.25);
+    ctx.quadraticCurveTo(p.hx+hr*1.3,hy-hr*0.9,p.hx+hr*1.06,hy+hr*0.95);
+    ctx.closePath();ctx.fill();
+    ctx.fillStyle='rgba(14,12,18,.5)';ctx.beginPath();
+    ctx.ellipse(p.hx,hy+0.7,hw*0.62,hw*0.66,0,0,6.29);ctx.fill();
+    ell(p.hx-hw*0.34,hy+0.7,0.55,0.66,'#0f0e14');
+    ell(p.hx+hw*0.34,hy+0.7,0.55,0.66,'#0f0e14');
+  }else if(kit.helm==='wizard'){
+    bar(p.hx-hr*1.5,hy-hr*0.62,hr*3.0,1.9,shade(col,-18));    // brim
+    ctx.fillStyle=shade(col,10);ctx.beginPath();
+    ctx.moveTo(p.hx-hr*0.86,hy-hr*0.5);ctx.lineTo(p.hx+hr*0.3,hy-hr*2.05);
+    ctx.lineTo(p.hx+hr*0.92,hy-hr*0.5);ctx.closePath();ctx.fill();
+    bar(p.hx-hr*0.72,hy-hr*0.92,hr*1.5,1.4,gold);
+    ell(p.hx+hr*0.36,hy-hr*2.05,1.0,1.0,acc);
+  }
+
+  /* --- what they carry for the gods, or for dinner --- */
+  if(kit.holy){
+    seg(p.hx-1.6,p.sh+1.2,p.hx,hy+hr*1.5,0.7,gold);
+    seg(p.hx+1.6,p.sh+1.2,p.hx,hy+hr*1.5,0.7,gold);
+    bar(p.hx-0.5,hy+hr*1.5-0.6,1.0,3.4,gold);
+    bar(p.hx-1.6,hy+hr*1.5+0.4,3.2,1.0,gold);
+  }
+
+  /* --- the shield, on the shield arm --- */
+  var sc=[shHand[0]-0.9,(p.sh+p.waist)/2+0.6];
+  if(kit.shield==='round'){
+    ell(sc[0],sc[1],4.6,4.6,steelD);
+    ell(sc[0],sc[1],3.8,3.8,acc);
+    ell(sc[0],sc[1],1.3,1.3,steel);
+    ctx.strokeStyle=shade(acc,-26);ctx.lineWidth=0.7;
+    ctx.beginPath();ctx.arc(sc[0],sc[1],2.7,0,6.29);ctx.stroke();
+    seg(sc[0]-2.2,sc[1],sc[0]+2.2,sc[1],0.9,shade(acc,34));
+  }else if(kit.shield==='kite'){
+    ctx.fillStyle=steelD;ctx.beginPath();
+    ctx.moveTo(sc[0]-4.4,sc[1]-4.8);ctx.lineTo(sc[0]+4.4,sc[1]-4.8);
+    ctx.quadraticCurveTo(sc[0]+3.4,sc[1]+3.2,sc[0],sc[1]+6.4);
+    ctx.quadraticCurveTo(sc[0]-3.4,sc[1]+3.2,sc[0]-4.4,sc[1]-4.8);
+    ctx.closePath();ctx.fill();
+    ctx.fillStyle=acc;ctx.beginPath();
+    ctx.moveTo(sc[0]-3.3,sc[1]-3.8);ctx.lineTo(sc[0]+3.3,sc[1]-3.8);
+    ctx.quadraticCurveTo(sc[0]+2.5,sc[1]+2.4,sc[0],sc[1]+4.9);
+    ctx.quadraticCurveTo(sc[0]-2.5,sc[1]+2.4,sc[0]-3.3,sc[1]-3.8);
+    ctx.closePath();ctx.fill();
+    bar(sc[0]-0.6,sc[1]-3.0,1.2,6.6,gold);bar(sc[0]-2.4,sc[1]-1.0,4.8,1.2,gold);
+  }else if(kit.shield==='buckler'){
+    ell(sc[0],sc[1],2.9,2.9,steelD);ell(sc[0],sc[1],2.2,2.2,acc);ell(sc[0],sc[1],0.9,0.9,steel);
+  }
+
+  /* --- the weapon, in the weapon hand --- */
+  var wh=wHand;
+  if(kit.weapon==='sword'){
+    bar(wh[0]-0.55,wh[1]-2.4,1.1,2.2,leather);                 // grip
+    bar(wh[0]-2.2,wh[1]-3.2,4.4,1.3,gold);                     // crossguard
+    ctx.fillStyle=steel;ctx.beginPath();                       // blade
+    ctx.moveTo(wh[0]-0.85,wh[1]-3.4);ctx.lineTo(wh[0]+0.85,wh[1]-3.4);
+    ctx.lineTo(wh[0]+0.85,wh[1]-13.6);ctx.lineTo(wh[0],wh[1]-15.2);
+    ctx.lineTo(wh[0]-0.85,wh[1]-13.2);ctx.closePath();ctx.fill();
+    seg(wh[0]+0.1,wh[1]-4.0,wh[0]+0.1,wh[1]-13.6,0.55,shade(steel,34));  // fuller
+    ell(wh[0],wh[1]+0.3,0.9,0.9,gold);                         // pommel
+  }else if(kit.weapon==='axe'){
+    seg(wh[0],wh[1]+0.4,wh[0]+0.4,wh[1]-13.0,1.4,wood);
+    ctx.fillStyle=steel;ctx.beginPath();
+    ctx.moveTo(wh[0]+0.2,wh[1]-12.6);ctx.quadraticCurveTo(wh[0]+5.4,wh[1]-11.4,
+      wh[0]+3.4,wh[1]-7.2);
+    ctx.lineTo(wh[0]+0.2,wh[1]-8.2);ctx.closePath();ctx.fill();
+    bar(wh[0]-0.9,wh[1]-13.4,1.9,1.3,iron);
+  }else if(kit.weapon==='mace'){
+    seg(wh[0],wh[1]+0.4,wh[0],wh[1]-10.4,1.4,wood);
+    ell(wh[0],wh[1]-12.0,2.4,2.4,iron);
+    for(var mqi=0;mqi<4;mqi++){var qa=mqi*Math.PI/2+0.78;
+      tri2(ctx,[wh[0],wh[1]-12.0],[wh[0]+Math.cos(qa)*4.0,wh[1]-12.0+Math.sin(qa)*4.0],
+           [wh[0]+Math.cos(qa+0.8)*2.2,wh[1]-12.0+Math.sin(qa+0.8)*2.2],steel);
+    }
+    ell(wh[0],wh[1]-12.0,1.0,1.0,shade(steel,24));
+    bar(wh[0]-1.3,wh[1]-9.6,2.6,1.2,iron);
+  }else if(kit.weapon==='hammer'){
+    seg(wh[0],wh[1]+0.4,wh[0],wh[1]-11.0,1.4,wood);
+    bar(wh[0]-2.6,wh[1]-14.2,5.2,3.4,iron);
+    bar(wh[0]-2.6,wh[1]-14.2,5.2,1.2,steel);
+  }else if(kit.weapon==='spear'){
+    seg(wh[0],wh[1]+1.0,wh[0]+0.5,wh[1]-18.4,1.4,wood);
+    ctx.fillStyle=steel;ctx.beginPath();
+    ctx.moveTo(wh[0]+0.5,wh[1]-16.2);ctx.lineTo(wh[0]+1.9,wh[1]-19.6);
+    ctx.lineTo(wh[0]+0.6,wh[1]-22.6);ctx.lineTo(wh[0]-0.7,wh[1]-19.4);
+    ctx.closePath();ctx.fill();
+    bar(wh[0]-1.0,wh[1]-16.8,2.2,1.2,iron);
+  }else if(kit.weapon==='bow'){
+    ctx.strokeStyle=wood;ctx.lineWidth=1.3;ctx.beginPath();
+    ctx.moveTo(wh[0]+1.4,wh[1]-8.4);ctx.quadraticCurveTo(wh[0]+6.2,wh[1]-1.6,
+      wh[0]+1.4,wh[1]+4.2);ctx.stroke();
+    ctx.strokeStyle='rgba(226,220,198,.75)';ctx.lineWidth=0.55;
+    ctx.beginPath();ctx.moveTo(wh[0]+1.4,wh[1]-8.4);ctx.lineTo(wh[0]+1.4,wh[1]+4.2);
+    ctx.stroke();
+    bar(wh[0]+0.6,wh[1]-1.8,1.6,3.6,leatherD);                 // the grip wrap
+  }else if(kit.weapon==='dagger'){
+    bar(wh[0]-0.5,wh[1]-1.8,1.0,2.0,leather);
+    bar(wh[0]-1.7,wh[1]-2.5,3.4,1.0,iron);
+    ctx.fillStyle=steel;ctx.beginPath();
+    ctx.moveTo(wh[0]-0.7,wh[1]-2.6);ctx.lineTo(wh[0]+0.7,wh[1]-2.6);
+    ctx.lineTo(wh[0],wh[1]-8.6);ctx.closePath();ctx.fill();
+  }else if(kit.weapon==='staff'){
+    seg(wh[0]-0.4,1.0,wh[0]+0.5,-25.6,1.6,wood);
+    bar(wh[0]-0.9,-3.4,1.9,1.6,iron);bar(wh[0]-0.7,-25.0,2.0,1.6,iron);
+    ell(wh[0]+0.6,-26.8,1.8,1.8,acc);ell(wh[0]+0.2,-27.2,0.8,0.8,shade(acc,40));
+  }
+}
+
+function portrait(c,canvas){
+  if(!canvas)return;
+  fitDpi(canvas);
+  var g=bg(canvas),w=canvas.width,h=canvas.height;
+  var d=figForChar(c);
+  /* Fit the whole likeness - helm crest, shield rim, staff head - inside the
+     frame with margin. Scaling by the box's short side alone slid helms off the
+     top edge and cut shields at the sides, which is what made six adventurers
+     look like six clipped blobs. */
+  var s=Math.max(0.14,Math.min(h*0.79/FIG_H,(w*0.82)/FIG_W));
+  var fy=h*0.90;
+  g.fillStyle='rgba(227,181,74,.10)';
+  g.beginPath();g.ellipse(w/2,fy,w*.30,h*.035,0,0,6.29);g.fill();
+  g.strokeStyle='rgba(233,226,207,.12)';g.lineWidth=1;
+  g.beginPath();g.moveTo(w*.12,fy+.5);g.lineTo(w*.88,fy+.5);g.stroke();
+  drawFig(g,d,w/2,fy,s);
+  if(c&&c.cls){
+    /* The class tag used to be printed straight over the figure's own feet. It
+       goes on a plate in the free top corner now. */
+    var fs=Math.max(9,Math.round(h*0.115)),lab=(c.cls||'')+' '+(c.lvl||1);
+    g.font=fs+'px Georgia';
+    var tw=g.measureText(lab).width;
+    g.fillStyle='rgba(8,9,13,.78)';g.fillRect(0,0,tw+fs*0.95,fs*1.55);
+    g.fillStyle='rgba(227,181,74,.5)';g.fillRect(0,fs*1.55-1,tw+fs*0.95,1);
+    g.fillStyle='rgba(233,226,207,.86)';g.fillText(lab,fs*0.48,fs*1.16);
+  }
+}
+
+/* Roster and party portraits are 44×52 in CSS. On a retina screen a 44-pixel
+   bitmap is then stretched to 88, which is why the company looked soft while the
+   text beside it was crisp. The bitmap follows the device; the CSS size stays. */
+function fitDpi(canvas){
+  var d=Math.max(1,Math.min(3,window.devicePixelRatio||1));
+  var cw=canvas.clientWidth||canvas.width,ch=canvas.clientHeight||canvas.height;
+  if(!cw||!ch)return;
+  var bw=Math.round(cw*d),bh=Math.round(ch*d);
+  if(canvas.width!==bw||canvas.height!==bh){canvas.width=bw;canvas.height=bh;}
+}
 function bg(canvas){
   var g=canvas.getContext('2d'),w=canvas.width,h=canvas.height;
   var gr=g.createLinearGradient(0,0,0,h);
@@ -401,16 +699,9 @@ function bg(canvas){
   g.strokeStyle='rgba(227,181,74,.18)';g.strokeRect(.5,.5,w-1,h-1);
   return g;
 }
-function portrait(c,canvas){
-  if(!canvas)return;
-  var g=bg(canvas),w=canvas.width,h=canvas.height;
-  g.fillStyle='rgba(227,181,74,.08)';
-  g.beginPath();g.ellipse(w/2,h*.86,w*.32,h*.05,0,0,6.29);g.fill();
-  drawFig(g,figForChar(c),w/2,h*.92,Math.min(w,h)/22);
-  if(c&&c.cls){g.fillStyle='rgba(233,226,207,.65)';g.font=Math.max(9,Math.round(h*.11))+'px Georgia';g.fillText((c.cls||'')+' '+(c.lvl||1),6,h-6);}
-}
 function monFigure(def,canvas,id){
   if(!canvas)return;
+  fitDpi(canvas);
   bg(canvas);
   var g=canvas.getContext('2d'),h=canvas.height;
   var d=monDesc(id||(def&&def.id)||'',def);
@@ -420,5 +711,6 @@ function monFigure(def,canvas,id){
 }
 return{drawFig:drawFig,figForChar:figForChar,portrait:portrait,monFigure:monFigure,
   monDesc:monDesc,monColor:monColor,sizeOf:sizeOf,inBox:inBox,inBoxAnim:inBoxAnim,
-  marksFor:marksFor,gaitAt:gaitAt,FRAMES:FRAMES,FIG_H:FIG_H};
+  marksFor:marksFor,gaitAt:gaitAt,FRAMES:FRAMES,FIG_H:FIG_H,FIG_W:FIG_W,
+  classKit:function(c){return figForChar(c);}};
 })();

@@ -121,8 +121,8 @@ function renderParty(){
     var row=el('div','mrow'+(c.dead?' dead':''));
     var pc=el('canvas');pc.width=44;pc.height=52;
     pc.title=c.name+' — '+Rules.RACES[c.race].name+' '+Rules.CLASSES[c.cls].name+' · '+c.hp+'/'+c.maxhp+' hp';
-    Figures.portrait(c,pc);
     row.appendChild(pc);
+    Figures.portrait(c,pc);
     var col=el('div','mcol');
     var nm=el('div');
     nm.innerHTML='<strong>'+esc(c.name)+'</strong> <span class="muted">'+esc(Rules.RACES[c.race].name+' '+Rules.CLASSES[c.cls].name+' '+c.lvl)+'</span>';
@@ -216,9 +216,9 @@ function sheet(c){
     '<h3 style="color:var(--gold);margin-top:10px">Pack</h3>'+inv;
   var entry=modal({title:c.name+' — Sheet',body:wrap,actions:[{label:'Close',primary:1}],onOpen:function(){
     var cv=el('canvas');cv.width=76;cv.height=98;
-    cv.style.cssText='float:left;margin:2px 14px 6px 2px';
-    try{Figures.portrait(c,cv);}catch(e){}
+    cv.style.cssText='float:left;margin:2px 14px 6px 2px;width:76px;height:98px';
     wrap.insertBefore(cv,wrap.firstChild);
+    try{Figures.portrait(c,cv);}catch(e){}
   }});
   wrap.addEventListener('click',function(e){
     var b=e.target.closest('button');if(!b)return;

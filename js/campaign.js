@@ -76,7 +76,21 @@ function assemble(){
     waiting=imported.roster.map(function(c){return c.id;});
     chosen=[];
   }else if(!chosen.length&&!waiting.length){
-    waiting=PREGENS.map(function(p){return p.id;});
+    /* A pregen used to arrive with no hit points at all - the roster read
+       "undefined/undefined hp" - because only `begin` gave them a body, and it
+       did so with a roll drawn from the party's order, so the sheet could not
+       honestly say what it was offering. Give each pregen its first-level hit
+       points now, seeded from its own id, and `begin` will find them already
+       material (exactly as it finds them for a created recruit) and keep them:
+       the number on the row is the number you march with. */
+    waiting=PREGENS.map(function(p){
+      if(!p.hp||!p.maxhp){
+        var seed=2166136261;
+        for(var i=0;i<p.id.length;i++)seed=Math.imul(seed^p.id.charCodeAt(i),16777619)>>>0;
+        materializeStarter(p,new Rules.RNG(seed));
+      }
+      return p.id;
+    });
   }
   document.getElementById('assemblySub').textContent='For '+m.code+': '+m.name+' — recommended levels '+m.levels[0]+'–'+m.levels[1]+', purse '+startGold()+' gp';
   renderAssembly();
@@ -92,8 +106,10 @@ function renderAssembly(){
   function rowFor(id,list,cho){
     var ch=byId(id);if(!ch)return;
     var row=UI.el('div','hero-row');
-    var pc=document.createElement('canvas');pc.width=44;pc.height=52;
-    Figures.portrait(ch,pc);row.appendChild(pc);
+    /* In the DOM first, then painted: the portrait sizes its bitmap from the
+       rendered box, which a detached canvas does not have yet. */
+    var pc=document.createElement('canvas');pc.width=58;pc.height=70;
+    row.appendChild(pc);Figures.portrait(ch,pc);
     var who=UI.el('div','who');
     who.innerHTML='<div class="nm">'+UI.esc(ch.name)+'</div><div class="rc">'+
       UI.esc(Rules.RACES[ch.race].name+' '+Rules.CLASSES[ch.cls].name+' '+ch.lvl+(ch.spec?' ('+UI.esc(ch.spec)+')':''))+'</div>';

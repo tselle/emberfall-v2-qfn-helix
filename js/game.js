@@ -14,6 +14,11 @@ function show(id){
   ['title','campaign','assembly','game'].forEach(function(s){
     var e=document.getElementById(s);if(e)e.classList.toggle('hidden',s!==id);
   });
+  /* The touch pads are absolute over the page, so on the assembly screen a pad
+     sat squarely on "Begin the adventure". They belong to the dungeon view and
+     to nothing else; the player's pad setting is left alone, they are merely
+     hidden while another screen is up. */
+  document.body.setAttribute('data-screen',id);
 }
 function fmtTime(mins){
   var day=1+Math.floor(mins/1440),h=Math.floor(mins%1440/60),m=mins%60;

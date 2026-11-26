@@ -64,7 +64,12 @@ h1,h2,h3{font-weight:normal;letter-spacing:.04em}
 .assembly-grid{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:22px;padding:18px 22px;overflow:auto;align-content:start}
 .assembly-grid h3{color:var(--gold);margin-bottom:8px;font-size:17px}
 .hero-row{display:flex;gap:12px;align-items:center;background:var(--panel);border:1px solid var(--edge);border-radius:8px;padding:9px 12px;margin-bottom:8px}
-.hero-row canvas,.hero-row .port{width:44px;height:52px;border:1px solid var(--edge);border-radius:4px;background:#10121a;flex:none}
+/* The company is now drawn with helms, shields and weapon heads; at 44×52 those
+   details merged into a smudge, and this row has the space for them. */
+.hero-row canvas,.hero-row .port{width:58px;height:70px;border:1px solid var(--edge);border-radius:4px;background:#10121a;flex:none}
+/* The touch pads are absolute over the whole page: they belong to the dungeon
+   view, and on the assembly screen one of them covered "Begin the adventure". */
+body:not([data-screen="game"]) .pad{display:none}
 .hero-row .who{flex:1;min-width:0}
 .hero-row .nm{color:var(--ink)}
 .hero-row .rc{font-size:12px;color:var(--muted)}
