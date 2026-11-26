@@ -448,10 +448,9 @@ function monCast(m){
   var best=null,who=null,chosen=null;
   known.forEach(function(sp){
     if(!(MONSPELL[sp].foe||MONSPELL[sp].area))return;
-    var rng=SPELLS[sp].rng||6;
     foes.forEach(function(p){
       var d=dist8(m,p);
-      if(d>rng||!losFree(m.x,m.y,p.x,p.y))return;
+      if(!spellInReach(m,sp,p.x,p.y))return;
       var score=d*100+(p.c.hp||0);
       if(best===null||score<best){best=score;who=p;chosen=sp;}
     });
@@ -636,6 +635,42 @@ function pcShoot(u,m){
   }
   draw();winCheck();
 }
+/* How far a spell carries, in BOARD SQUARES. The battlefield is ten feet to a side
+   and the data's ranges are already written in squares - the spec says so in as many
+   words ("Fireball reaches 12 squares, radius 2.3"). The line this replaced divided
+   them by ten as though they were feet, which collapsed every spell on the board to
+   the same three-square reach: a magic missile authored at five reached no further
+   than a fireball authored at twelve, while touch spells, having no range field at
+   all, reached nowhere and everywhere by turns. A range of 0 is the old convention
+   for a spell that starts in the caster's own hands: a cone needs no target square,
+   and a single foe spell written with range 0 strikes whatever the caster can see. */
+function spellReach(sp){
+  var d=SPELLS[sp];if(!d)return 1;
+  if(d.tgt==='self')return 0;
+  if(d.tgt==='touch')return 1;
+  return d.rng===undefined?6:d.rng;
+}
+function reachLabel(sp){
+  var d=SPELLS[sp];if(!d)return '';
+  if(d.tgt==='self')return 'on self';
+  if(d.tgt==='touch')return 'touch';
+  var r=spellReach(sp);
+  /* Range 0 keeps its old reading for the area spells written that way - bless, flame
+     strike, holy word - which have always been put down anywhere the caster can see
+     a square, and are not about to be narrowed by a reach fix aimed elsewhere. */
+  if(r===0)return d.tgt==='enemy'?'a foe in sight':'any square in sight';
+  return 'reach '+r+' sq';
+}
+function spellInReach(u,sp,tx,ty){
+  var d=SPELLS[sp];if(!d)return false;
+  if(d.tgt==='self')return tx===u.x&&ty===u.y;
+  if(d.tgt==='touch')return dist8(u,{x:tx,y:ty})<=1;
+  var r=spellReach(sp),p={x:tx,y:ty};
+  if(d.tgt==='ally'||d.tgt==='party')return dist8(u,p)<=r;
+  var seen=losFree(u.x,u.y,tx,ty);          // an obstacle between the hand and the foe
+  if(r===0)return seen;
+  return dist8(u,p)<=r&&seen;
+}
 function spellMenu(u,casts){
   var c=u.c;
   var body=UI.el('div');
@@ -643,13 +678,17 @@ function spellMenu(u,casts){
   casts.forEach(function(sp){
     var def=SPELLS[sp],info=SPELLC[sp];
     var row=UI.el('div','item');
-    row.innerHTML='<span><b>'+UI.esc(def.n)+'</b> <span class=muted>ring '+def.l+' · '+info.tip+'</span><br><span class=muted>'+UI.esc(def.desc)+'</span></span>';
+    row.innerHTML='<span><b>'+UI.esc(def.n)+'</b> <span class=muted>ring '+def.l+' · '
+      +reachLabel(sp)+' · '+info.tip+'</span><br><span class=muted>'+UI.esc(def.desc)+'</span></span>';
     var acts=UI.el('span','acts');
     var b=UI.el('button',null,'Cast ('+c.mem[sp]+')');
     b.onclick=function(){
       UI.closeTop();
-      c.mem[sp]--;if(c.mem[sp]<=0)delete c.mem[sp];
-      if(info.t==='self'||info.t==='all'){info.f(c,null,CB);endAct();}
+      /* The slot burns when the spell leaves, not when the hand is raised. A player
+         who armed a spell, thought better of it, and pressed Escape was charged for a
+         casting that never happened - and a target clicked outside the spell's reach
+         cost the slot besides. */
+      if(info.t==='self'||info.t==='all'){c.mem[sp]--;if(c.mem[sp]<=0)delete c.mem[sp];info.f(c,null,CB);endAct();}
       else{CB.tool={kind:'spell',sp:sp,info:info};draw();
         UI.toast('Now choose a '+(info.t==='cell'?'place on the board':info.t==='ally'?'companion':'foe')+'.');}
     };
@@ -659,8 +698,14 @@ function spellMenu(u,casts){
 }
 function castAt(u,tx,ty,target){
   var c=u.c,tool=CB.tool,sp=tool.sp,info=tool.info;
-  var rngT=Math.max(1,Math.round(((SPELLS[sp].rng||30)||30)/10));
-  if(SPELLS[sp].rng>0&&Math.max(Math.abs(u.x-tx),Math.abs(u.y-ty))>rngT+2){UI.toast('Beyond the reach of the gesture.');return;}
+  if(!spellInReach(u,sp,tx,ty)){
+    var r=spellReach(sp);
+    UI.toast(r===0?SPELLS[sp].n+' carries to whatever the caster can plainly see.'
+      :(r===1?'Out of touch: '+c.name+' must be within a square of the subject.'
+        :'Beyond the reach of the gesture: '+SPELLS[sp].n+' carries '+r+' squares, and the line must be clear.'));
+    return;
+  }
+  if(!tool.scrollId){c.mem[sp]--;if(c.mem[sp]<=0)delete c.mem[sp];}
   if(tool.scrollId){Game.consumePack(c,tool.scrollId);logEvent('The magic unravels from its paper or wand.');}
   CB.tool=null;
   logEvent(c.name+' weaves '+SPELLS[sp].n+'.');
@@ -1255,8 +1300,13 @@ function draw(){
       if(CB.turn&&CB.turn.side==='p'&&!CB.tool&&mk!==undefined&&!(x===CB.turn.x&&y===CB.turn.y)){
         diamond(px,py);g.fillStyle='rgba(90,130,220,0.14)';g.fill();
       }
-      if(CB.tool&&(CB.tool.kind==='spell'&&CB.tool.info.t==='cell')){
-        diamond(px,py);g.fillStyle='rgba(200,90,60,0.10)';g.fill();
+      if(CB.tool&&CB.tool.kind==='spell'&&CB.turn){
+        /* The squares the gesture will actually answer to, lit; the rest put away.
+           A preview that offers a square the rules then refuse is a worse guide than
+           no preview at all. */
+        diamond(px,py);
+        g.fillStyle=spellInReach(CB.turn,CB.tool.sp,x,y)?'rgba(200,90,60,0.16)':'rgba(12,11,10,0.34)';
+        g.fill();
       }
     }
   }
@@ -1431,7 +1481,7 @@ function autoAct(){
   CB.mons.forEach(function(mm){if(standing(mm)){var d=dist8(u,mm);if(d<bd){bd=d;m=mm;}}});
   if(!m){endAct();return;}
   var casts=casterSpells(u.c);
-  if(u.c.cls==='M'&&u.c.mem.mmissile>0&&bd>1){
+  if(u.c.cls==='M'&&u.c.mem.mmissile>0&&bd>1&&spellInReach(u,'mmissile',m.x,m.y)){
     u.c.mem.mmissile--;if(u.c.mem.mmissile<=0)delete u.c.mem.mmissile;
     SPELLC.mmissile.f(u.c,{unit:m},CB);endAct();return;
   }
@@ -1450,5 +1500,6 @@ function autoAct(){
 return{start:start,isActive:isActive,onKey:onKey,init:init,resize:resize,autoAct:autoAct,__build:function(u){buildCommands(u);},_move:function(u,tx,ty){CB.turn=u;CB.moveSet=moveSet(u);return doMove(u,tx,ty);},
   _turn:function(){return CB&&CB.turn;},_cb:function(){return CB;},
   _shoot:function(u,m){pcShoot(u,m);},
+  _reach:spellReach,_inReach:spellInReach,
   _clear:function(){if(CB&&CB.done)CB=null;}};
 })();
