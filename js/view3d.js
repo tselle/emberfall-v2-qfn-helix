@@ -142,7 +142,7 @@ function prepare(mapDef){
             solid:function(x,y){if(x<0||y<0||x>=w||y>=h)return true;return wall[y*w+x]===1;}};
   /* Doors first: the lamps and the goods are placed from the fronts. */
   var sd=shopDoors(prep);
-  prep.doorW=sd.mask;prep.doorFaces=sd.faces;prep.doorRooms=sd.rooms;
+  prep.doorW=sd.mask;prep.doorFaces=sd.faces;prep.doorRooms=sd.rooms;prep.svcAt=sd.svcAt;
   prep.lights=mapLights(w,h,wall,mapDef,sd.faces);
   prep.props=propsFor(prep);
   prep.props=prep.props.concat(fixturesFor(prep));   // the village's own furniture
@@ -170,7 +170,7 @@ function hashL(x,y,salt){
    the goods behind it stay behind it - while the tile stays walkable, so the door is
    something you go through rather than something you admire. */
 function shopDoors(prep){
-  var w=prep.w,h=prep.h,mask=new Uint8Array(w*h),faces=[],rooms=[];
+  var w=prep.w,h=prep.h,mask=new Uint8Array(w*h),faces=[],rooms=[],svcAt=[];
   var mapDef=prep.def;
   if(!mapDef||mapDef.overland||!mapDef.locs||!mapDef.grid)return {mask:mask,faces:faces,rooms:rooms};
   var NB=[[0,-1],[0,1],[-1,0],[1,0]];
@@ -185,12 +185,13 @@ function shopDoors(prep){
       if(nx<1||ny<1||nx>=w-1||ny>=h-1)continue;
       if(prep.solid(nx,ny)||prep.roof[ny*w+nx])continue;   // not street: an inner wall or the yard
       mask[tiles[i][1]*w+tiles[i][0]]=1;
+      svcAt[tiles[i][1]*w+tiles[i][0]]=svc;
       faces.push({x:tiles[i][0],y:tiles[i][1],dx:NB[j][0],dy:NB[j][1],svc:svc});
       if(!room)room={x:tiles[i][0],y:tiles[i][1],dx:NB[j][0],dy:NB[j][1],svc:svc,tiles:tiles};
     }
     if(room)rooms.push(room);
   }
-  return {mask:mask,faces:faces,rooms:rooms};
+  return {mask:mask,faces:faces,rooms:rooms,svcAt:svcAt};
 }
 
 /* What stands in each shop. Goods go against the back wall and along the sides. The
@@ -408,26 +409,252 @@ var TEXCACHE=null,CTEX=null;
    Every failure is recorded here and reported on the console, because a missing texture
    is otherwise indistinguishable from a bad design choice. */
 var TEXFAIL=[];
+/* One painter, one texture, and a RECORDED failure. Built at module level so the
+   per-trade shopfronts can be painted lazily, on the first time you actually see
+   that trade, rather than all eight on the first frame of every delve. */
+function texTile(painter){
+  try{
+    var SC=TEXPX/TEX;
+    var c0=document.createElement('canvas');c0.width=TEXPX;c0.height=TEXPX;
+    var g0=c0.getContext('2d');g0.setTransform(SC,0,0,SC,0,0);
+    painter(g0,TEX);
+    return mkTex(c0);
+  }catch(e){
+    var rec={painter:(TEXCACHE?Object.keys(TEXCACHE).length:0),
+             keySoFar:(TEXCACHE?Object.keys(TEXCACHE).join(''):''),
+             error:String(e&&e.message||e)};
+    TEXFAIL.push(rec);
+    if(window.console&&console.warn)console.warn('Emberfall: texture painter failed',rec);
+    return null;
+  }
+}
+/* ---- one storefront, eight trades ----------------------------------------
+   A service letter on a map has always known what it sells: the armory is a forge,
+   the temple is the Dawn's alms-house, the training ground is a yard of sawdust.
+   From the lane every one of them was the same pale wall with the same brown band
+   in the window, which throws away the only thing a town can say about itself for
+   free. So: ONE painter and a recipe per trade - plaster, timber, glass, what
+   stands on the sill, and what is painted on the board over the door. Recipes are
+   data rather than separate painters so the shared bones (wall head, corner posts,
+   lintel, jambs, threshold) cannot drift apart between them. */
+var SVCBASE={
+  wall:'#c9bb9d',mottle:'116,98,70',seed:7777,
+  wood:'#38281a',woodHi:'rgba(96,70,40,.85)',woodLo:'rgba(12,8,4,.65)',
+  door:'#4a3421',glass:['252,206,132','214,148,70','112,68,34'],
+  sill:'60,36,14',signFace:'#d8c49a',motif:'none',goods:'band',awning:null
+};
+function svcRecipe(o){var r={},k;for(k in SVCBASE)r[k]=SVCBASE[k];for(k in o)r[k]=o[k];return r;}
+var SVCART={
+  '':SVCBASE,
+  /* Beds and supper: warm, low, and lit earliest in the morning. */
+  inn:svcRecipe({wall:'#cbb692',mottle:'110,86,54',seed:8121,wood:'#2f2013',
+    door:'#3f2c19',glass:['255,214,146','226,152,62','118,62,28'],motif:'mug',goods:'pots'}),
+  /* The tavern keeps later and burns redder. */
+  tavern:svcRecipe({wall:'#c2a683',mottle:'96,64,40',seed:8231,wood:'#241a12',
+    door:'#33220f',glass:['255,190,120','214,104,52','96,42,26'],motif:'foam',goods:'mugs'}),
+  /* A forge: soot on the plaster, iron instead of joinery, and the window is on fire. */
+  armory:svcRecipe({wall:'#a8a297',mottle:'58,52,48',seed:8341,wood:'#25221f',
+    woodHi:'rgba(120,120,124,.55)',woodLo:'rgba(8,8,10,.75)',door:'#2e2a26',
+    glass:['255,196,110','240,120,40','86,36,18'],sill:'34,26,22',motif:'anvil',goods:'blades'}),
+  /* The Botanic Bench: pale, green-stained, and crowded with bottles. */
+  apothecary:svcRecipe({wall:'#c4c8b2',mottle:'74,88,66',seed:8451,wood:'#3a4030',
+    woodHi:'rgba(108,128,92,.8)',door:'#333a2b',
+    glass:['226,246,224','150,196,148','52,78,60'],motif:'mortar',goods:'bottles',
+    signFace:'#dfe3cc',awning:['#6f8a5c','#dde2c8']}),
+  /* Grimsby's: everything, under a striped awning, in the middle of the street. */
+  general:svcRecipe({wall:'#d0bd98',mottle:'104,80,50',seed:8561,wood:'#4a3a22',
+    door:'#54401f',glass:['252,214,150','216,158,74','116,74,34'],motif:'ring',
+    goods:'bottles',signFace:'#e4d3ab',awning:['#9c4a34','#e2d6b4']}),
+  /* The Dawn's alms-house: whitewashed, plain, and lit with lamplight rather than hearthlight. */
+  temple:svcRecipe({wall:'#dcd8c8',mottle:'120,116,100',seed:8671,wood:'#8c8574',
+    woodHi:'rgba(238,234,220,.8)',woodLo:'rgba(60,58,50,.5)',door:'#6e6757',
+    glass:['255,244,206','236,208,132','140,112,58'],sill:'96,92,80',motif:'dawn',goods:'lamp'}),
+  /* The board and the ledger: stone, heavy oak, no ornament. */
+  hall:svcRecipe({wall:'#bab4a6',mottle:'78,74,66',seed:8781,wood:'#31261c',
+    door:'#3a2d1f',glass:['244,226,178','196,164,96','96,80,48'],motif:'shield',goods:'shield'}),
+  /* The yard: scarred timber, sun-bleached plaster, and a waster leaning in the window. */
+  training:svcRecipe({wall:'#cdbb96',mottle:'126,102,62',seed:8891,wood:'#4d3a24',
+    woodHi:'rgba(140,108,62,.85)',door:'#5b452a',
+    glass:['250,226,176','208,170,102','110,88,48'],motif:'swords',goods:'wasters'})
+};
+/* What stands on the sill inside the glass. Silhouettes only: the window is 21×18
+   design units and anything drawn inside it that tries to be detail reads as dirt. */
+function windowGoods(g,kind,X,Y,W,H,ink){
+  g.fillStyle=ink;
+  var base=Y+H-2.5,i,w,h;
+  if(kind==='mugs'){
+    for(i=0;i<3;i++){w=3.4;h=5.5+i*0.8;var mx=X+3+i*6;
+      g.fillRect(mx,base-h,w,h);
+      g.beginPath();g.arc(mx+w+1.4,base-h*0.55,1.7,0,6.29);g.fill();
+      g.fillRect(mx-0.6,base-h-1.2,w+1.2,1.6);}
+  }else if(kind==='bottles'){
+    for(i=0;i<4;i++){w=2.6+i%2;h=4.5+(i%3)*2.2;var bx=X+2.5+i*4.8;
+      g.fillRect(bx,base-h,w,h);
+      g.fillRect(bx+w*0.3,base-h-2,w*0.4,2.4);}
+  }else if(kind==='blades'){
+    g.save();g.translate(X+5,base);g.rotate(-0.22);
+    g.fillRect(0,-13,2.2,13);g.fillRect(-1.6,-15,5.4,2.4);g.restore();
+    g.beginPath();g.arc(X+15,base-6,3.4,Math.PI,0);g.lineWidth=1.6;g.strokeStyle=ink;g.stroke();
+    g.fillRect(X+18,base-9,2.6,9);
+  }else if(kind==='pots'){
+    g.beginPath();g.ellipse(X+6,base-3.6,4.4,3.6,0,0,6.29);g.fill();
+    g.fillRect(X+3.4,base-8.6,5.2,2.2);
+    g.beginPath();g.ellipse(X+15.5,base-2.6,3.2,2.6,0,0,6.29);g.fill();
+    g.fillRect(X+13,base-6.4,5,1.8);
+  }else if(kind==='lamp'){
+    g.fillRect(X+7,base-1.6,4,1.6);
+    g.beginPath();g.moveTo(X+9,base-2);g.lineTo(X+11.4,base-9);g.lineTo(X+6.6,base-9);g.closePath();g.fill();
+    g.fillRect(X+8.2,base-11.6,1.6,2.8);
+    g.fillRect(X+15,base-4.4,4.4,4.4);g.fillRect(X+14,base-5.2,6.4,1.2);
+  }else if(kind==='shield'){
+    g.save();g.translate(X+8,base);g.rotate(0.12);
+    g.beginPath();g.moveTo(0,0);g.lineTo(0,-9);g.lineTo(7.4,-9);g.lineTo(7.4,-2.4);
+    g.quadraticCurveTo(3.7,1.6,0,0);g.closePath();g.fill();g.restore();
+    g.fillRect(X+17,base-8.6,2,8.6);g.fillRect(X+15,base-8.6,6,1.6);
+  }else if(kind==='wasters'){
+    for(i=0;i<3;i++){g.save();g.translate(X+6+i*4.2,base);g.rotate(-0.3+i*0.12);
+      g.fillRect(0,-11-i,1.7,11+i);g.restore();}
+    g.beginPath();g.ellipse(X+17,base-1.6,2.6,1.6,0,0,6.29);g.fill();
+  }else{
+    g.fillRect(X,Y+H*0.62,W,H*0.38);            // the old anonymous band of goods
+  }
+}
+/* The board over the door. Every trade hangs one; what is painted on it is the whole
+   difference between a forge and a temple. */
+function signMotif(g,kind,x,y,w,h,ink){
+  var cx=x+w/2,cy=y+h/2;
+  g.fillStyle=ink;g.strokeStyle=ink;
+  if(kind==='mug'||kind==='foam'){
+    g.fillRect(cx-4,cy-4,7,9);
+    g.lineWidth=1.5;g.beginPath();g.arc(cx+4.6,cy+0.4,2.6,-1.2,1.2);g.stroke();
+    if(kind==='foam'){g.fillStyle='rgba(252,248,236,.95)';g.fillRect(cx-5,cy-6,9,2.4);}
+  }else if(kind==='anvil'){
+    g.beginPath();g.moveTo(cx-6,cy-2);g.lineTo(cx+4,cy-2);g.lineTo(cx+6.4,cy-0.6);
+    g.lineTo(cx+4,cy+1.2);g.lineTo(cx-2.4,cy+1.2);g.lineTo(cx-2.4,cy+4);g.lineTo(cx+2,cy+5.6);
+    g.lineTo(cx-7,cy+5.6);g.lineTo(cx-3.6,cy+1.2);g.closePath();g.fill();
+    g.fillRect(cx-7,cy-5.2,4.4,3.2);
+  }else if(kind==='mortar'){
+    g.beginPath();g.moveTo(cx-5.4,cy-1);g.lineTo(cx+5.4,cy-1);
+    g.quadraticCurveTo(cx+3.4,cy+6,cy,cy+6);
+    g.quadraticCurveTo(cx-3.4,cy+6,cx-5.4,cy-1);g.closePath();g.fill();
+    g.save();g.translate(cx+1,cy-1.4);g.rotate(-0.7);g.fillRect(0,-6.4,2.2,8);g.restore();
+  }else if(kind==='ring'){
+    g.lineWidth=1.8;g.beginPath();g.arc(cx-1,cy-1.4,4.2,0,6.29);g.stroke();
+    g.fillRect(cx-2,cy+2.2,1.8,5);g.fillRect(cx-3.4,cy+5.6,2.2,1.6);
+    g.fillRect(cx+2.4,cy+1.4,1.8,4.6);g.fillRect(cx+1.4,cy+4.6,2.2,1.6);
+  }else if(kind==='dawn'){
+    g.beginPath();g.arc(cx,cy+1,4,Math.PI,0);g.closePath();g.fill();
+    g.lineWidth=1.5;g.lineCap='round';
+    for(var i=0;i<5;i++){var a=Math.PI+(Math.PI/6)*(i+0.5);
+      g.beginPath();g.moveTo(cx+Math.cos(a)*5.4,cy+1+Math.sin(a)*5.4);
+      g.lineTo(cx+Math.cos(a)*8,cy+1+Math.sin(a)*8);g.stroke();}
+    g.fillRect(cx-8,cy+2,16,1.6);
+  }else if(kind==='shield'){
+    g.beginPath();g.moveTo(cx,cy-6.4);g.lineTo(cx+5.6,cy-4.4);g.lineTo(cx+5,cy+2.4);
+    g.quadraticCurveTo(cx,cy+7,cx-5,cy+2.4);g.lineTo(cx-5.6,cy-4.4);g.closePath();g.fill();
+    g.fillStyle='rgba(252,248,236,.85)';g.beginPath();g.arc(cx,cy-1,1.7,0,6.29);g.fill();  // boss
+  }else if(kind==='swords'){
+    g.lineWidth=2;g.lineCap='round';
+    g.beginPath();g.moveTo(cx-6,cy+5);g.lineTo(cx+6,cy-5.4);g.stroke();
+    g.beginPath();g.moveTo(cx+6,cy+5);g.lineTo(cx-6,cy-5.4);g.stroke();
+    g.lineWidth=1.4;g.beginPath();g.moveTo(cx-4.4,cy+1.6);g.lineTo(cx-1.6,cy+4.4);g.stroke();
+    g.beginPath();g.moveTo(cx+4.4,cy+1.6);g.lineTo(cx+1.6,cy+4.4);g.stroke();
+  }
+}
+/* The storefront itself. Painted as one face: the wall continues across the whole
+   tile and the door is cut into it. This is what a traveller reads from the lane - a
+   closed leaf with a lit window beside it and a beam over its head - and it is also
+   what makes a building an enclosed thing rather than a shelter: with no face across
+   the opening, the ceiling of the room starts at the street line and every shop looks
+   like a carport. v runs down from the wall head, so the door head sits at 0.31 of
+   the storey. */
+function shopfront(rec){
+  return function(g){
+    var S=TEX/64;                                     // paint in 64-unit terms, fill the grid
+    grain(g,rec.wall,14,rec.seed);
+    var r=new Rules.RNG(rec.seed);
+    for(var i=0;i<40;i++){g.fillStyle='rgba('+rec.mottle+','+(0.05+r.chance(.5)?.07:.03)+')';
+      g.beginPath();g.arc(r.int(0,TEX),r.int(0,TEX),r.int(5,14),0,6.29);g.fill();}
+    g.save();g.scale(S,S);
+    function beam(x,y,w,h){g.fillStyle=rec.wood;g.fillRect(x,y,w,h);
+      g.fillStyle=rec.woodHi;g.fillRect(x,y+1,w,1);
+      g.fillStyle=rec.woodLo;g.fillRect(x,y+h-1,w,1);}
+    beam(0,0,64,4);beam(0,60,64,4);                   // wall head and base
+    beam(3,0,4,64);beam(56,0,4,64);                   // corner posts
+    // weather streaks under the wall head
+    g.fillStyle='rgba(70,56,36,.22)';
+    for(var sx=12;sx<52;sx+=9)g.fillRect(sx,5,3,r.int(6,14));
+    /* the board over the door: fixings, face, and the trade painted on it */
+    var PX=8,PY=5,PW=28,PH=11;
+    beam(PX-1.5,PY-1.5,PW+3,PH+3);
+    g.fillStyle=rec.signFace;g.fillRect(PX,PY,PW,PH);
+    g.fillStyle='rgba(30,22,12,.20)';g.fillRect(PX,PY+PH-2,PW,2);
+    /* Clipped to the board: a motif that overruns the plaque paints onto the wall
+       head, and a ray or a key hanging over the framing reads as a mistake rather
+       than a sign. Every recipe is thereby allowed to fill the board. */
+    g.save();g.beginPath();g.rect(PX,PY,PW,PH);g.clip();
+    signMotif(g,rec.motif,PX,PY,PW,PH,'rgba(46,32,18,.92)');
+    g.restore();
+    g.fillStyle='#6b6459';                             // iron fixings into the framing
+    g.fillRect(PX+2,PY-3.4,1.8,2.4);g.fillRect(PX+PW-3.8,PY-3.4,1.8,2.4);
+    /* an awning over the sill for the trades that spill onto the street */
+    if(rec.awning){
+      var AY=21,AW=27,AX=36,N=6;
+      for(var aw=0;aw<N;aw++){
+        g.fillStyle=rec.awning[aw%2];
+        g.beginPath();g.moveTo(AX+aw*AW/N,AY);g.lineTo(AX+(aw+1)*AW/N,AY);
+        g.lineTo(AX+(aw+1)*AW/N-0.6,AY+6);g.lineTo(AX+aw*AW/N-0.6,AY+6);g.closePath();g.fill();
+      }
+      g.fillStyle='rgba(24,18,10,.35)';g.fillRect(AX-1,AY+6,AW+2,1.8);   // its shadow on the glass
+    }
+    /* the shop window: lit glass, oak frame, mullions, a stone sill */
+    var WX=38,WY=25,WW=21,WH=18;
+    var rg=g.createRadialGradient(WX+WW*0.5,WY+WH*0.55,1,WX+WW*0.5,WY+WH*0.55,WW*0.95);
+    rg.addColorStop(0,'rgba('+rec.glass[0]+',.98)');rg.addColorStop(0.55,'rgba('+rec.glass[1]+',.92)');
+    rg.addColorStop(1,'rgba('+rec.glass[2]+',.92)');
+    g.fillStyle=rg;g.fillRect(WX,WY,WW,WH);
+    windowGoods(g,rec.goods,WX,WY,WW,WH,'rgba('+rec.sill+',.62)');
+    g.fillStyle='#2f2116';
+    g.fillRect(WX+WW/2-0.8,WY,1.6,WH);g.fillRect(WX,WY+WH/2-0.8,WW,1.6);    // mullions
+    beam(WX-2,WY-3,WW+4,3);beam(WX-2,WY+WH,WW+4,3);
+    beam(WX-2,WY-3,3,WH+6);beam(WX+WW-1,WY-3,3,WH+6);
+    g.fillStyle='#7d6a4e';g.fillRect(WX-3,WY+WH+3,WW+6,3);                  // sill
+    /* the door: planked, braced, ironed, with a small glazed quarter light */
+    var DX=12,DY=20,DW=22,DH=59-DY;   // leaf reaches the threshold at 0.92 of the storey
+    beam(DX-2,DY-4,DW+4,4);                                                // lintel over the head
+    g.fillStyle=rec.door;g.fillRect(DX,DY,DW,DH);
+    for(var p=0;p<4;p++){                                                  // vertical boards
+      var al=(r.int(-10,10))/220;                                          // tint, not colour
+      g.fillStyle=al<0?'rgba(0,0,0,'+(-al).toFixed(3)+')':'rgba(255,236,200,'+al.toFixed(3)+')';
+      g.fillRect(DX+1+p*(DW-2)/4,DY+1,(DW-2)/4-1,DH-2);
+      g.fillStyle='rgba(16,10,4,.55)';g.fillRect(DX+p*(DW-2)/4,DY,1,DH);
+    }
+    g.fillStyle='#3a2818';g.fillRect(DX+1,DY+DH*0.42,DW-2,3);              // brace rail
+    g.save();g.translate(DX+2,DY+DH-3);g.rotate(-0.62);
+    g.fillStyle='#3a2818';g.fillRect(0,0,DW*0.8,3);g.restore();            // diagonal brace
+    g.fillStyle='#2a2118';
+    g.fillRect(DX+1,DY+6,DW*0.55,2.4);g.fillRect(DX+1,DY+DH*0.62,DW*0.6,2.4);  // iron straps
+    g.fillStyle='#8d8478';g.beginPath();g.arc(DX+DW-4,DY+DH*0.5,1.9,0,6.29);g.fill();
+    g.fillStyle='#5a5248';g.beginPath();g.arc(DX+DW-4,DY+DH*0.5,1,0,6.29);g.fill();
+    // quarter light in the door head, glowing
+    var QX=DX+DW*0.28,QY=DY+3,QW=DW*0.44,QH=6;
+    g.fillStyle='rgba('+rec.glass[0]+',.95)';g.fillRect(QX,QY,QW,QH);
+    g.fillStyle='#2f2116';g.fillRect(QX+QW/2-0.7,QY,1.4,QH);
+    g.fillStyle='#38281a';g.fillRect(QX-1.5,QY-1.5,QW+3,1.5);g.fillRect(QX-1.5,QY+QH,QW+3,1.5);
+    g.fillRect(QX-1.5,QY-1.5,1.5,QH+3);g.fillRect(QX+QW,QY-1.5,1.5,QH+3);
+    // jamb posts either side of the leaf
+    beam(DX-3,DY-1,3,DH+1);beam(DX+DW,DY-1,3,DH+1);
+    g.fillStyle='#6d6255';g.fillRect(DX-1,59,DW+2,3);                       // threshold stone
+    g.fillStyle='rgba(252,196,120,.16)';g.fillRect(DX,DY,DW,DH);            // light past the leaf
+    g.restore();
+  };
+}
 function buildTextures(){
   if(TEXCACHE)return TEXCACHE;
   TEXPX=texBaseSize();
   GTEX=null;CTEX=null;               // ground and ceilings share the raster size
   TEXCACHE={};
-  function tile(painter){
-    try{
-      var SC=TEXPX/TEX;
-      var c0=document.createElement('canvas');c0.width=TEXPX;c0.height=TEXPX;
-      var g0=c0.getContext('2d');g0.setTransform(SC,0,0,SC,0,0);
-      painter(g0,TEX);
-      return mkTex(c0);
-    }catch(e){
-      var rec={painter:Object.keys(TEXCACHE).length,keySoFar:Object.keys(TEXCACHE).join(''),
-               error:String(e&&e.message||e)};
-      TEXFAIL.push(rec);
-      if(window.console&&console.warn)console.warn('Emberfall: texture painter failed',rec);
-      return null;
-    }
-  }
+  function tile(painter){return texTile(painter);}
   TEXCACHE['#']=tile(function(g){   // warm irregular masonry
     grain(g,'#77705f',22,11);
     var r=new Rules.RNG(1111);
@@ -459,68 +686,9 @@ function buildTextures(){
     }
     g.fillStyle='rgba(20,14,10,.4)';g.fillRect(0,0,TEX,2);
   });
-  /* A shopfront, painted as one face: the wall continues across the whole tile and the
-     door is cut into it. This is what a traveller reads from the lane - a closed leaf
-     with a lit window beside it and a beam over its head - and it is also what makes a
-     building an enclosed thing rather than a shelter: with no face across the opening,
-     the ceiling of the room starts at the street line and every shop looks like a carport.
-     v runs down from the wall head, so the door head sits at 0.31 of the storey. */
-  TEXCACHE['*']=tile(function(g){
-    var S=TEX/64;                                     // paint in 64-unit terms, fill the grid
-    grain(g,'#c9bb9d',14,77);
-    var r=new Rules.RNG(7777);
-    for(var i=0;i<40;i++){g.fillStyle='rgba(116,98,70,'+(0.05+r.chance(.5)?.07:.03)+')';
-      g.beginPath();g.arc(r.int(0,TEX),r.int(0,TEX),r.int(5,14),0,6.29);g.fill();}
-    g.save();g.scale(S,S);
-    function beam(x,y,w,h){g.fillStyle='#38281a';g.fillRect(x,y,w,h);
-      g.fillStyle='rgba(96,70,40,.85)';g.fillRect(x,y+1,w,1);
-      g.fillStyle='rgba(12,8,4,.65)';g.fillRect(x,y+h-1,w,1);}
-    beam(0,0,64,4);beam(0,60,64,4);                   // wall head and base
-    beam(3,0,4,64);beam(56,0,4,64);                   // corner posts
-    // weather streaks under the wall head
-    g.fillStyle='rgba(70,56,36,.22)';
-    for(var sx=12;sx<52;sx+=9)g.fillRect(sx,5,3,r.int(6,14));
-    /* the shop window: lit glass, oak frame, mullions, a stone sill */
-    var WX=38,WY=25,WW=21,WH=18;
-    var rg=g.createRadialGradient(WX+WW*0.5,WY+WH*0.55,1,WX+WW*0.5,WY+WH*0.55,WW*0.95);
-    rg.addColorStop(0,'rgba(252,206,132,.98)');rg.addColorStop(0.55,'rgba(214,148,70,.92)');
-    rg.addColorStop(1,'rgba(112,68,34,.92)');
-    g.fillStyle=rg;g.fillRect(WX,WY,WW,WH);
-    g.fillStyle='rgba(60,36,14,.55)';g.fillRect(WX,WY+WH*0.62,WW,WH*0.38);  // goods in the window
-    g.fillStyle='#2f2116';
-    g.fillRect(WX+WW/2-0.8,WY,1.6,WH);g.fillRect(WX,WY+WH/2-0.8,WW,1.6);    // mullions
-    beam(WX-2,WY-3,WW+4,3);beam(WX-2,WY+WH,WW+4,3);
-    beam(WX-2,WY-3,3,WH+6);beam(WX+WW-1,WY-3,3,WH+6);
-    g.fillStyle='#7d6a4e';g.fillRect(WX-3,WY+WH+3,WW+6,3);                  // sill
-    /* the door: planked, braced, ironed, with a small glazed quarter light */
-    var DX=12,DY=20,DW=22,DH=59-DY;   // leaf reaches the threshold at 0.92 of the storey
-    beam(DX-2,DY-4,DW+4,4);                                                // lintel over the head
-    g.fillStyle='#4a3421';g.fillRect(DX,DY,DW,DH);
-    for(var p=0;p<4;p++){                                                  // vertical boards
-      var pv=r.int(-10,10);
-      g.fillStyle='rgb('+(82+pv)+','+(58+pv*0.7|0)+','+(36+pv*0.5|0)+')';
-      g.fillRect(DX+1+p*(DW-2)/4,DY+1,(DW-2)/4-1,DH-2);
-      g.fillStyle='rgba(16,10,4,.55)';g.fillRect(DX+p*(DW-2)/4,DY,1,DH);
-    }
-    g.fillStyle='#3a2818';g.fillRect(DX+1,DY+DH*0.42,DW-2,3);              // brace rail
-    g.save();g.translate(DX+2,DY+DH-3);g.rotate(-0.62);
-    g.fillStyle='#3a2818';g.fillRect(0,0,DW*0.8,3);g.restore();            // diagonal brace
-    g.fillStyle='#2a2118';
-    g.fillRect(DX+1,DY+6,DW*0.55,2.4);g.fillRect(DX+1,DY+DH*0.62,DW*0.6,2.4);  // iron straps
-    g.fillStyle='#8d8478';g.beginPath();g.arc(DX+DW-4,DY+DH*0.5,1.9,0,6.29);g.fill();
-    g.fillStyle='#5a5248';g.beginPath();g.arc(DX+DW-4,DY+DH*0.5,1,0,6.29);g.fill();
-    // quarter light in the door head, glowing
-    var QX=DX+DW*0.28,QY=DY+3,QW=DW*0.44,QH=6;
-    g.fillStyle='rgba(248,198,120,.95)';g.fillRect(QX,QY,QW,QH);
-    g.fillStyle='#2f2116';g.fillRect(QX+QW/2-0.7,QY,1.4,QH);
-    g.fillStyle='#38281a';g.fillRect(QX-1.5,QY-1.5,QW+3,1.5);g.fillRect(QX-1.5,QY+QH,QW+3,1.5);
-    g.fillRect(QX-1.5,QY-1.5,1.5,QH+3);g.fillRect(QX+QW,QY-1.5,1.5,QH+3);
-    // jamb posts either side of the leaf
-    beam(DX-3,DY-1,3,DH+1);beam(DX+DW,DY-1,3,DH+1);
-    g.fillStyle='#6d6255';g.fillRect(DX-1,59,DW+2,3);                       // threshold stone
-    g.fillStyle='rgba(252,196,120,.16)';g.fillRect(DX,DY,DW,DH);            // light past the leaf
-    g.restore();
-  });
+  /* The generic front: the bones every trade shares, for a service that has no
+     recipe of its own. The trades themselves are painted lazily in texFor. */
+  TEXCACHE['*']=tile(shopfront(SVCART['']));
   /* A fountain. The grid has always had a character for it, and until now it drew the
      same anonymous masonry as a cellar wall: a fountain is a public thing, standing in
      a square, and you should know what you have walked into from the far side of the
@@ -756,7 +924,18 @@ function buildTextures(){
 }
 function texFor(c){
   var t=buildTextures();
-  return t[c]||t['#'];
+  if(t[c])return t[c];
+  /* A trade's front is painted the first time that trade is actually seen, and kept
+     from then on. Painting all eight whenever anyone rendered a cellar would tax the
+     first frame of every delve for shops that are forty miles away. */
+  if(c.length>2&&c.charAt(0)==='*'&&c.charAt(1)===':'){
+    var recipe=SVCART[c.slice(2)];
+    if(recipe){
+      var made=texTile(shopfront(recipe));
+      if(made){t[c]=made;return made;}
+    }
+  }
+  return t['#'];
 }
 
 function mkTex(c0){
@@ -1867,7 +2046,14 @@ function render(prep,cam,scale,opts){
       /* A storefront is a face you can walk through but not see through. It stays out of
          the wall set, because the door opens for anyone, but the eye is stopped by it -
          and you are the exception once you are standing in the doorway yourself. */
-      else if(DOORS&&DOORS[hi]&&!(mapX===camTX&&mapY===camTY)){hit=1;c='*';}
+      else if(DOORS&&DOORS[hi]&&!(mapX===camTX&&mapY===camTY)){
+        hit=1;
+        /* The front belongs to a trade, and the trade wears its own face: soot on a
+           forge, whitewash on the alms-house, bottles behind the bench. The face is
+           still a storefront in every other respect; only the paint knows who rents it. */
+        var dsvc=prep.svcAt&&prep.svcAt[hi];
+        c=(dsvc&&SVCART[dsvc])?'*:'+dsvc:'*';
+      }
     }
     if(hit!==1){continue;}
     dist=side===0?(mapX-cx+(1-stepX)/2)/rdx:(mapY-cy+(1-stepY)/2)/rdy;
@@ -1879,7 +2065,7 @@ function render(prep,cam,scale,opts){
     // texture column
     var wallU=side===0?(cy+dist*rdy):(cx+dist*rdx);
     var wallX=wallU-Math.floor(wallU);
-    var doorFace=(c==='*');
+    var doorFace=(c.charAt(0)==='*');
     var texMat=mat.wall[c]||c,tex=texFor(texMat);
     /* The inside of a building's own wall is not a facade. On an outdoor map a face
        whose far side is roofed bounds a room, and a room has one door for light:
@@ -2389,9 +2575,12 @@ return{init:init,resize:resize,prepare:prepare,render:render,minimap:minimap,
   texFailures:function(){buildTextures();return TEXFAIL;},
   /* A single material, large, on the page. Judging a painter by the swatch instead of
      by walking around a village looking for it is a different order of iteration. */
+  /* A painter that throws is recorded, not swallowed - but a record nobody can read
+     is only half a report, so the list is exposed for the console and for tests. */
+  texFails:function(){return TEXFAIL.slice();},
   texSwatch:function(k){
     buildTextures();
-    var t=TEXCACHE[k];
+    var t=/^\*:/.test(k)?texFor(k):TEXCACHE[k];   // a trade's front is built on demand
     if(!t||!t.base)return 'no texture for '+k;
     var c=document.createElement('canvas');
     c.width=256;c.height=256;
