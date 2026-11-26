@@ -654,6 +654,11 @@ function monAct(m){
     if(t){monStrike(m,t);draw();if(!winCheck())nextTurn();return;}
   }
   if(t){
+    /* The shot is taken from where they stand, before the charge. A band at the
+       far gate gets one volley as the company closes — and still comes on:
+       at move 12 a foe crosses this board in a single turn, so a shot taken
+       after moving would never be fired at all. */
+    var loosed=dist8(m,t)>1&&monShoot(m,t);
     // move toward target keeping budget
     var budget=m.mv*2;
     var step=1;
@@ -670,10 +675,41 @@ function monAct(m){
       if(!moved)break;
     }
     if(dist8(m,t)<=1)monStrike(m,t);
-    else logEvent(m.name+' circles closer.');
+    else logEvent(m.name+(loosed?' presses in behind its own shot.':' circles closer.'));
   }
   draw();
   if(!winCheck())nextTurn();
+}
+/* Foes with a ranged weapon loose on the way in. They draw on the same weapon
+   table the company does, so the same arithmetic holds: the weapon's rate of
+   fire, the same range bands, the same refusal to shoot past a foe at hand.
+   They do not track ammunition — a band's quiver belongs to the story, not to
+   the pack — and they do not change how they advance: this is a shot taken
+   while closing, never a way of hanging back. */
+function monShoot(m,t){
+  var w=m.def.shoot?item(m.def.shoot):null;
+  if(!w||!t||t.c.hp<=0||t.c.dead)return false;
+  var d=dist8(m,t),shot=Rules.missileBand(w,d);
+  if(shot.mod===null||!losFree(m.x,m.y,t.x,t.y))return false;
+  var lvl=Math.max(1,Math.ceil(typeof m.def.hd==='number'?m.def.hd:1));
+  var n=w.rof||1;
+  for(var a=0;a<n;a++){
+    if(!CB||CB.done||t.c.hp<=0||t.c.dead)break;
+    if(t.fx.mirror>0&&Rules.play.chance(.4)){logEvent('A mirror-image ducks the '+w.n.toLowerCase()+' shot.');continue;}
+    if(t.fx.stoneskin>0){t.fx.stoneskin--;logEvent('A stone wrinkle takes the '+w.n.toLowerCase()+' shot.');continue;}
+    var need=Rules.THAC0('F',lvl)-shot.mod-pcAC(t.c);
+    var roll=Rules.play.d20();
+    fxTracer(m.x,m.y,t.x,t.y,'#b9736a');
+    if(roll===20||(roll!==1&&roll>=need)){
+      var dmg=Math.max(0,Rules.dice(w.d||'1d6'));
+      t.c.hp-=dmg;
+      fxBurst(t.x,t.y,'#a3402f');fxNum(t.x,t.y,'-'+dmg,'#ff7b6b',14,(a-1)*18);
+      logEvent(m.name+' looses a '+w.n.toLowerCase()+' at '+t.c.name+' from '+d+' paces ('
+        +shot.label+', '+(shot.mod>=0?'+':'')+shot.mod+') for '+dmg+'.');
+      if(t.c.hp<=0)logEvent(t.c.hp>-10?t.c.name+' collapses!':t.c.name+' falls still.');
+    }else logEvent(m.name+'’s '+shot.label+' shot at '+t.c.name+' falls wide.');
+  }
+  return true;
 }
 function parseAtk(m,i){
   var s=(m.def.atk&&m.def.atk[i])||'1d6';

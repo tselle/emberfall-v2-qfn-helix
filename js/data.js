@@ -175,14 +175,14 @@ function MO(id,o){
 }
 MO('rat',{n:'Giant Rat',hd:.5,hp:'1d4',ac:7,mv:12,ml:5,xp:15,gold:'',atk:['1d4-1'],size:'S',fig:'rat',tags:[],lore:'Cellar vermin emboldened by dark winters.'});
 MO('centipede',{n:'Large Centipede',hd:1,hp:'1d8',ac:6,mv:9,ml:7,xp:15,atk:['1d2 + bite'],fig:'centipede',tags:[],lore:'Its bite brings fever; a stench precedes it.'});
-MO('kobold',{n:'Kobold',hd:0.5,hp:'1d4-2',ac:7,mv:8,ml:6,xp:65,atk:['1d6-1'],size:'S',fig:'humanoid',tags:['humanoid','kobold'],gold:'2d6',lore:'Sneaky and spiteful; they swarm in the dark.'});
+MO('kobold',{n:'Kobold',hd:0.5,hp:'1d4-2',ac:7,mv:8,ml:6,xp:65,atk:['1d6-1'],shoot:'sling',size:'S',fig:'humanoid',tags:['humanoid','kobold'],gold:'2d6',lore:'Sneaky and spiteful; they swarm in the dark.'});
 MO('beetle',{n:'Bombardier Beetle',hd:2,hp:'2d8',ac:4,mv:9,ml:12,xp:140,atk:['1d8 + spray'],fig:'insect',tags:[],lore:'Searing spray, 2 rounds per burst.'});
 MO('wolf',{n:'Winter Wolf',hd:2,hp:'2d8+1',ac:6,mv:12,ml:8,xp:140,atk:['1d6 bite'],fig:'wolf',tags:['canine'],lore:'Pale-coated hunters of the vale.'});
-MO('gnoll',{n:'Gnoll',hd:2,hp:'2d8+1',ac:7,mv:12,ml:10,xp:140,atk:['1d8+1'],fig:'humanoid',tags:['humanoid','gnoll'],gold:'2d6x10',lore:'Hyena-men of the watchtower pack.'});
+MO('gnoll',{n:'Gnoll',hd:2,hp:'2d8+1',ac:7,mv:12,ml:10,xp:140,atk:['1d8+1'],shoot:'shortbow',fig:'humanoid',tags:['humanoid','gnoll'],gold:'2d6x10',lore:'Hyena-men of the watchtower pack.'});
 MO('gnollpacklord',{n:'Bloodmane Packlord',hd:4.3,hp:'4d8+3',ac:4,mv:12,ml:12,xp:600,atk:['1d8+4','1d4 claws'],fig:'humanoid',leader:1,tags:['humanoid','gnoll'],gold:'8d6x10',lore:'Chieftain of the Bloodmane; wears a mane-crown of teeth.'});
-MO('ogre',{n:'Ogre Brute',hd:4.2,hp:'4d8+2',ac:5,mv:12,ml:12,xp:270,atk:['1d10+4'],size:'L',fig:'humanoid',tags:['giantkin','ogre'],gold:'2d6x10',lore:'Dim, brutal, and stronger than plate looks.'});
+MO('ogre',{n:'Ogre Brute',hd:4.2,hp:'4d8+2',ac:5,mv:12,ml:12,xp:270,atk:['1d10+4'],shoot:'javellin',size:'L',fig:'humanoid',tags:['giantkin','ogre'],gold:'2d6x10',lore:'Dim, brutal, and stronger than plate looks.'});
 MO('redfang',{n:'Redfang the Chieftain',hd:5.2,hp:'5d8+2',ac:3,mv:12,ml:14,xp:650,atk:['2d8+5'],size:'L',leader:1,fig:'humanoid',tags:['giantkin','ogre'],gold:'12d6x10',lore:'The red-crowned ogre who holds the abbey undercroft.'});
-MO('ogrewatcher',{n:'Ogre Watcher',hd:4.2,hp:'4d8+2',ac:5,mv:12,ml:10,xp:270,atk:['1d10+3'],size:'L',fig:'humanoid',tags:['giantkin','ogre'],lore:'Set to mind the abbey stair.'});
+MO('ogrewatcher',{n:'Ogre Watcher',hd:4.2,hp:'4d8+2',ac:5,mv:12,ml:10,xp:270,atk:['1d10+3'],shoot:'javellin',size:'L',fig:'humanoid',tags:['giantkin','ogre'],lore:'Set to mind the abbey stair.'});
 MO('skeleton',{n:'Skeleton',hd:1,hp:'1d8',ac:7,mv:12,ml:'fearless',xp:35,atk:['1d6+1'],fig:'skeleton',undead:1,tags:['undead'],lore:'Bone turns half non-blunt damage. Fire and bludgeons serve.'});
 MO('zombie',{n:'Shambling Zombie',hd:2,hp:'2d8',ac:8,mv:6,ml:'fearless',xp:65,atk:['1d8+1'],undead:1,tags:['undead'],lore:'Slow, numbed to pain; fire is the friendliest mercy.'});
 MO('ghoul',{n:'Ghoul',hd:2,hp:'2d8',ac:6,mv:9,ml:'fearless',xp:120,atk:['1d6+1','paralysis'],undead:1,tags:['undead'],lore:'A frozen touch: failed save sleeps for hours. Elves shrug it off.'});
@@ -193,7 +193,7 @@ MO('cultist',{n:'Ashen Cultist',hd:1,hp:'1d8',ac:8,mv:12,ml:8,xp:65,atk:['1d6'],
 MO('zealot',{n:'Ashen Zealot',hd:3,hp:'3d8+1',ac:6,mv:12,ml:12,xp:270,atk:['1d8+2'],fig:'humanoid',tags:['humanoid','cult'],gold:'6d6x10',lore:'Veterans of the circle; scarred lips, iron faith.'});
 MO('malvek',{n:'Malvek the Ashen',hd:'caster 5',hp:'4d4+2',ac:6,mv:12,ml:'fearless',xp:1400,atk:['1d4'],fig:'humanoid',caster:5,casterList:['bolt','scare','invis'],leader:1,tags:['humanoid','cult'],gold:'20d6x10',lore:'Once a temple scribe; his circle desecrates the undercroft.'});
 MO('werehyena',{n:'Bloodmane (were-hyena)',hd:4.3,hp:'4d8+3',ac:3,mv:15,ml:12,xp:600,atk:['1d8+3'],fig:'wolf',tags:['lycanthrope'],silver:1,lore:'Only silver or magic bites; in human guise, a gnoll laugh.'});
-MO('brigand',{n:'Brigand',hd:1,hp:'1d8+1',ac:7,mv:12,ml:8,xp:65,atk:['1d8'],fig:'humanoid',tags:['humanoid','bandit'],gold:'5d6x10',lore:'Fallen folk of the Emberwild roads.'});
+MO('brigand',{n:'Brigand',hd:1,hp:'1d8+1',ac:7,mv:12,ml:8,xp:65,atk:['1d8'],shoot:'shortbow',fig:'humanoid',tags:['humanoid','bandit'],gold:'5d6x10',lore:'Fallen folk of the Emberwild roads.'});
 MO('brigandchief',{n:'Brigand Lord',hd:4.1,hp:'4d8+1',ac:5,mv:12,ml:12,xp:420,atk:['1d8+2','1d4 dagger'],leader:1,fig:'humanoid',tags:['humanoid','bandit'],gold:'20d6x10',lore:'The tall man at the Bloodmane camp fireside.'});
 MO('merchant',{n:'Country Merchant',hd:1,hp:'1d6',ac:9,mv:12,ml:6,xp:0,fig:'humanoid',neutral:1,reaction:7,tags:['humanoid'],gold:'2d6x10',lore:'Belted with coin, guarded by a mule and prayers.'});
 MO('pilgrim',{n:'Dawn Pilgrim',hd:1,hp:'1d6',ac:9,mv:9,ml:6,xp:0,fig:'humanoid',neutral:1,reaction:9,tags:['humanoid'],lore:'Walking to the Dawnstones with a candle in a lantern.'});

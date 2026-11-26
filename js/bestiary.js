@@ -13,6 +13,12 @@ function loreLines(id){
   if(!def){out.push('A creature your company has met but never named.');return out;}
   out.push('Hit Dice '+def.hd+' · AC '+(def.ac!=null?def.ac:'?')+' · Move '+(def.mv||12)+' · XP '+(def.xp||0));
   out.push('Attacks: '+(def.atk||['1d6']).join(' / ')+(def.size?' · size '+def.size:''));
+  if(def.shoot){
+    var sw=item(def.shoot);
+    out.push('Looses '+(sw?sw.n.toLowerCase():def.shoot)+' at a distance: '
+      +((sw&&sw.rof)||1)+' shot'+(((sw&&sw.rof)||1)>1?'s':'')+' a round, '
+      +((sw&&sw.bands)?sw.bands*3:'?')+' paces.');
+  }
   if(def.ml!=null)out.push('Morale: '+(def.ml==='fearless'?'fearless':def.ml));
   if(def.undead)out.push('Undead (turned as rank '+(typeof def.undead==='number'?def.undead:Math.ceil(def.hd))+').');
   if(def.regen)out.push('Regains '+def.regen+' wounds a round unless burned.');
