@@ -171,6 +171,13 @@ function nextTurn(){
     if(!standing(u)){u.acted=true;continue;}
     if(u.acted){continue;}
     if(u.side==='m'&&(u.hp<=0||u.gone)){continue;}
+    /* A bound company member loses the act to the binding - the word costs the
+       turn, not merely the look of it. Monsters pay the same toll in monAct. */
+    if(u.side==='p'&&u.held>0){
+      u.held--;u.acted=true;
+      logEvent(u.c.name+(u.held>0?' remains bound and loses the act.':' shakes the binding loose, but the act is gone.'));
+      continue;
+    }
     break;
   }
   var un=CB.order[CB.idx];
@@ -356,6 +363,106 @@ function ammoLeft(c,it){
   });
   return n;
 }
+/* A caster's hit dice are written 'caster 5', not 5. Anything that has to fight
+   or cast needs the number, and Math.ceil('caster 5') is NaN - which is how a
+   fifth-level villain came to hit only on a natural twenty. */
+function monLevel(m){
+  var hd=m.def.hd;
+  if(typeof hd==='number')return Math.max(1,Math.ceil(hd));
+  if(m.def.caster)return m.def.caster;
+  return 1;
+}
+/* Monster casters spend the company's own ring table, with one allowance: every
+   spell on the authored list must stand at least once, so a witch-queen can be
+   given a sixth-ring word without being mute about it. */
+function casterSlotsFor(m){
+  var s=Rules.slotsFor('M',monLevel(m)).slice();
+  (m.def.casterList||[]).forEach(function(sp){
+    var def=SPELLS[sp];if(!def||!def.l)return;
+    if(s.length<def.l)s.length=def.l;
+    if(!s[def.l-1])s[def.l-1]=1;
+  });
+  return s;
+}
+/* A foe's spell, aimed the other way. Area effects are borrowed whole: areaFx
+   hands every unit on the board to the effect and each side knows its own
+   saving throw. Single-target ones are not - the party-side versions save as
+   monsters and bleed as monsters - so each is written with the company's
+   arithmetic here. Fear in a companion is not modelled as flight in this battle
+   loop: the nerve breaks, the act is lost, which is the nearest honest
+   translation and it is said plainly in the log. */
+var MONSPELL={
+  bolt:{foe:1,f:function(m,t){
+    var d=Rules.dice(Math.min(10,monLevel(m))+'d6');
+    var got=pcsave(t.c,'breath')?Math.ceil(d/2):d;
+    t.c.hp-=got;fxBurst(t.x,t.y,'#8fb7d8');fxNum(t.x,t.y,'-'+got,'#bfe0f5',15,0);
+    logEvent(m.name+' calls a line of lightning down '+t.c.name+' ('+got+').');
+    if(t.c.hp<=0)logEvent(t.c.name+' is cast down and smoking.');}},
+  cloudkill:{area:1,f:function(m,t){
+    SPELLC.cloudkill.f({lvl:monLevel(m),name:m.name},{x:t.x,y:t.y,unit:t});}},
+  flesh:{foe:1,f:function(m,t){
+    if(!pcsave(t.c,'poly')){t.c.hp=0;fxBurst(t.x,t.y,'#9aa0a8');
+      logEvent(m.name+' turns '+t.c.name+' to grey stone.');}
+    else logEvent(t.c.name+' keeps his skin; the word slides off.');}},
+  holdperson:{foe:1,f:function(m,t){
+    if(!pcsave(t.c,'spell')){t.held=Math.max(1,Math.min(3,monLevel(m)));
+      logEvent(t.c.name+' stands frozen mid-step.');}
+    else logEvent(t.c.name+' strains against the word and holds.');}},
+  holdmon:{foe:1,f:function(m,t){MONSPELL.holdperson.f(m,t);}},
+  scare:{foe:1,f:function(m,t){
+    if(pcsave(t.c,'wand'))logEvent(t.c.name+' masters its fear.');
+    else{t.held=Math.max(t.held||0,1);
+      logEvent(t.c.name+'’s nerve breaks — ground given, act lost.');}}},
+  invis:{self:1,f:function(m){m.invisT=6;logEvent(m.name+' fades from the firelight.');}},
+  clw:{ally:1,f:function(m,t){
+    var d=Rules.dice(monLevel(m)>=7?'2d8':'1d8');
+    t.hp=Math.min(t.maphp,t.hp+d);fxBurst(t.x,t.y,'#7fc98f');
+    logEvent(m.name+' lays a filthy hand on '+t.name+' and closes the wound ('+d+').');}}
+};
+function spendSlot(m,sp){var r=(SPELLS[sp].l||1)-1;m.slots[r]=(m.slots[r]||0)-1;}
+/* The working, and the choice of it. Casting is the whole turn - a foe that
+   calls weather does not also cross the field - and when the slots are gone the
+   caster falls back on its dagger like anyone else. Heal first, because a witch
+   who mends her pack instead of trading blows is the fight a company remembers;
+   ward only when already hurt; otherwise the nearest company member with a
+   clean line, ties going to the one on the fewer feet. Monsters are not cruel
+   snipers, they are simply close to what is in front of them. */
+function monCast(m){
+  if(!m.def.caster||CB.done)return false;
+  if(!m.slots)m.slots=casterSlotsFor(m);
+  var known=(m.def.casterList||[]).filter(function(sp){
+    var d=SPELLS[sp];            // a mis-named word costs the caster the word, not the battle
+    return d&&MONSPELL[sp]&&(m.slots[(d.l||1)-1]>0);
+  });
+  if(!known.length)return false;
+  var foes=CB.pcs.filter(function(p){return !isDown(p);});
+  if(!foes.length)return false;
+  var heal=known.filter(function(sp){return MONSPELL[sp].ally;})[0];
+  if(heal){
+    var hurt=CB.mons.filter(function(a){return standing(a)&&a.hp<=a.maphp*0.6;})
+      .sort(function(a,b){return (a.hp/a.maphp)-(b.hp/b.maphp);})[0];
+    if(hurt){spendSlot(m,heal);MONSPELL[heal].f(m,hurt);fxTracer(m.x,m.y,hurt.x,hurt.y,'#7fc98f');return true;}
+  }
+  var ward=known.filter(function(sp){return MONSPELL[sp].self&&!m.invisT;})[0];
+  if(ward&&m.hp<m.maphp*0.6){spendSlot(m,ward);MONSPELL[ward].f(m,m);return true;}
+  var best=null,who=null,chosen=null;
+  known.forEach(function(sp){
+    if(!(MONSPELL[sp].foe||MONSPELL[sp].area))return;
+    var rng=SPELLS[sp].rng||6;
+    foes.forEach(function(p){
+      var d=dist8(m,p);
+      if(d>rng||!losFree(m.x,m.y,p.x,p.y))return;
+      var score=d*100+(p.c.hp||0);
+      if(best===null||score<best){best=score;who=p;chosen=sp;}
+    });
+  });
+  if(!who)return false;
+  spendSlot(m,chosen);
+  logEvent(m.name+' weaves '+SPELLS[chosen].n+'.');
+  fxTracer(m.x,m.y,who.x,who.y,'#a88fd0');
+  MONSPELL[chosen].f(m,who);
+  return true;
+}
 /* What left the hand this battle, so that half of it can come back again. */
 function threw(id){if(CB){CB.thrown=CB.thrown||{};CB.thrown[id]=(CB.thrown[id]||0)+1;}return true;}
 /* Spend one round. A counted quiver re-stores itself as 'arrow#7'; a thrown
@@ -451,9 +558,11 @@ function pcAttack(u,m,opts){
     if(u.fx.prayer>0)bonus+=1;
     if(opts.backstab&&first)bonus+=4;
     if(opts.called)bonus-=4;
+    if(m.invisT>0)bonus-=4;              // the swing goes where it was a moment ago
     var res=Rules.toHitRoll(c,m.ac,bonus);
     m.seen=true;
     if(u.fx.invisT>0){u.fx.invisT=0;logEvent(c.name+' steps out of thin air!');}
+    if(res.hit&&m.invisT>0){m.invisT=0;logEvent(m.name+' stands revealed by the blow.');}
     if(m.held>0){
       // a sleeping or held foe yields to any opening: automatic hit, then wakes
       var dmg0=swing(u,m,opts,first);
@@ -648,12 +757,14 @@ function monAct(m){
   if(m.blindT>0){m.blindT--;logEvent(m.name+' gropes at the dark.');draw();nextTurn();return;}
   if(m.slowedT>0&&CB.round%2===0){m.slowedT--;logEvent(m.name+' moves in a dream-slow dance.');draw();nextTurn();return;}
   m.seen=true;
+  if(m.invisT>0)m.invisT--;
   var t=nearestPc(m,false);
   if(!t){ // only down pcs remain: finish them
     t=nearestPc(m,true);
     if(t){monStrike(m,t);draw();if(!winCheck())nextTurn();return;}
   }
   if(t){
+    if(monCast(m)){draw();if(!winCheck())nextTurn();return;}
     /* The shot is taken from where they stand, before the charge. A band at the
        far gate gets one volley as the company closes — and still comes on:
        at move 12 a foe crosses this board in a single turn, so a shot taken
@@ -691,7 +802,7 @@ function monShoot(m,t){
   if(!w||!t||t.c.hp<=0||t.c.dead)return false;
   var d=dist8(m,t),shot=Rules.missileBand(w,d);
   if(shot.mod===null||!losFree(m.x,m.y,t.x,t.y))return false;
-  var lvl=Math.max(1,Math.ceil(typeof m.def.hd==='number'?m.def.hd:1));
+  var lvl=monLevel(m);
   var n=w.rof||1;
   for(var a=0;a<n;a++){
     if(!CB||CB.done||t.c.hp<=0||t.c.dead)break;
@@ -719,7 +830,7 @@ function parseAtk(m,i){
 function monStrike(m,t){
   if(!t||!standing(m))return;
   var c=t.c;
-  var lvl=Math.max(1,Math.ceil(m.def.hd));
+  var lvl=monLevel(m);
   var n=(m.def.atk&&m.def.atk.length)||1;
   if(n>2)n=2;
   for(var a=0;a<n;a++){
@@ -756,9 +867,15 @@ function msave(m,kind,mod){
   var need=20-Math.min(17,Math.ceil(m.def.hd))+(mod||0);
   return Rules.play.d20()>=need;
 }
+/* NOTE on the argument order: saveTargets wants (group, level) - see game.js and
+   the sheet - and this used to hand it the character. The result was an array
+   of nulls, and `d20 >= null` is always true, so every saving throw in combat
+   silently passed. Nothing noticed because nothing cast at the company. */
 function pcsave(c,kind,mod){
-  var sv=Rules.saveTargets(c);
-  var idx={poison:1,wand:1,poly:2,breath:3,spell:4,death:0}[kind]||4;
+  var sv=Rules.saveTargets(Rules.CLASSES[c.cls].save,c.lvl);
+  /* Column order is the game's own SAVE_NAMES, and game.js reads gas/poison from
+     column 0 - this had poison in the rod column, two points too hard. */
+  var idx={poison:0,wand:1,poly:2,breath:3,spell:4,death:0}[kind]||4;
   return Rules.play.d20()>=sv[idx]+(mod||0);
 }
 function areaFx(cx,cy,r,fn){

@@ -13,6 +13,10 @@ function loreLines(id){
   if(!def){out.push('A creature your company has met but never named.');return out;}
   out.push('Hit Dice '+def.hd+' · AC '+(def.ac!=null?def.ac:'?')+' · Move '+(def.mv||12)+' · XP '+(def.xp||0));
   out.push('Attacks: '+(def.atk||['1d6']).join(' / ')+(def.size?' · size '+def.size:''));
+  if(def.caster&&def.casterList&&def.casterList.length){
+    out.push('Casts as a '+def.caster+'th-level caster: '+def.casterList.map(function(s){
+      return SPELLS[s]?SPELLS[s].n.toLowerCase():s;}).join(', ')+'.');
+  }
   if(def.shoot){
     var sw=item(def.shoot);
     out.push('Looses '+(sw?sw.n.toLowerCase():def.shoot)+' at a distance: '
