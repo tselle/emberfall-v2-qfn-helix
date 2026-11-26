@@ -142,7 +142,8 @@ function prepare(mapDef){
             solid:function(x,y){if(x<0||y<0||x>=w||y>=h)return true;return wall[y*w+x]===1;}};
   /* Doors first: the lamps and the goods are placed from the fronts. */
   var sd=shopDoors(prep);
-  prep.doorW=sd.mask;prep.doorFaces=sd.faces;prep.doorRooms=sd.rooms;prep.svcAt=sd.svcAt;
+  prep.doorW=sd.mask;prep.doorFaces=sd.faces;prep.doorRooms=sd.rooms;
+  prep.svcAt=sd.svcAt;prep.svcAll=sd.svcAll;
   prep.lights=mapLights(w,h,wall,mapDef,sd.faces);
   prep.props=propsFor(prep);
   prep.props=prep.props.concat(fixturesFor(prep));   // the village's own furniture
@@ -172,7 +173,7 @@ function hashL(x,y,salt){
 function shopDoors(prep){
   var w=prep.w,h=prep.h,mask=new Uint8Array(w*h),faces=[],rooms=[],svcAt=[];
   var mapDef=prep.def;
-  if(!mapDef||mapDef.overland||!mapDef.locs||!mapDef.grid)return {mask:mask,faces:faces,rooms:rooms};
+  if(!mapDef||mapDef.overland||!mapDef.locs||!mapDef.grid)return {mask:mask,faces:faces,rooms:rooms,svcAll:null};
   var NB=[[0,-1],[0,1],[-1,0],[1,0]];
   for(var k in mapDef.locs){
     if(k.length!==1)continue;
@@ -191,7 +192,16 @@ function shopDoors(prep){
     }
     if(room)rooms.push(room);
   }
-  return {mask:mask,faces:faces,rooms:rooms,svcAt:svcAt};
+  /* And every tile of a service says whose room it is: the wall you look at from
+     inside a forge is the forge's own wall, and its shell is painted accordingly.
+     Only the town material has an interior, so only townlike maps pay for this scan. */
+  var svcAll=new Array(w*h).fill('');
+  for(var sk in mapDef.locs){
+    if(sk.length!==1||!mapDef.locs[sk].svc)continue;
+    for(var sy=0;sy<h;sy++)for(var sx=0;sx<w;sx++)
+      if(prep.char[sy*w+sx]===sk)svcAll[sy*w+sx]=mapDef.locs[sk].svc;
+  }
+  return {mask:mask,faces:faces,rooms:rooms,svcAt:svcAt,svcAll:svcAll};
 }
 
 /* What stands in each shop. Goods go against the back wall and along the sides. The
@@ -477,6 +487,117 @@ var SVCART={
     woodHi:'rgba(140,108,62,.85)',door:'#5b452a',
     glass:['250,226,176','208,170,102','110,88,48'],motif:'swords',goods:'wasters'})
 };
+  /* ---- the inside of the same eight trades --------------------------------
+     The room behind a shopfront has always been one grey box: one lime wash, one
+     wainscot, one soot pattern, whatever the trade. The goods and furniture are
+     already placed by trade, so the shell is the last thing still pretending.
+     Same architecture as the fronts: recipes are data, one painter, built on first
+     sighting. Deliberately quiet - this is a wall seen past a shelf at lamplight,
+     and an interior that competes with its own furniture is a mistake. */
+var INBASE={
+  wash:'#a2988a',mottle:'70,62,50',seed:9091,soot:1,
+  beam:'rgba(88,74,54,.26)',wain:'#2e2317',wainHi:'rgba(126,100,64,.5)',
+  mark:null,markA:0,shelf:0,paper:0,scuff:0,bolts:0
+};
+function inRecipe(o){var r={},k;for(k in INBASE)r[k]=INBASE[k];for(k in o)r[k]=o[k];return r;}
+var INART={
+  '':INBASE,
+  /* Beds, a fire, and paper on the walls above the wainscot. The paper carries the
+     room: an inn whose shell measured within two luminance of an untraded cellar
+     wall was only nominally a different building. */
+  inn:inRecipe({wash:'#9c8462',mottle:'78,58,34',seed:9111,soot:1.15,
+    beam:'rgba(98,76,48,.34)',wain:'#33240f',paper:1.45}),
+  /* Smoke has lived here longer than the company has. */
+  tavern:inRecipe({wash:'#98876f',mottle:'58,46,32',seed:9222,soot:1.7,
+    beam:'rgba(80,62,40,.34)',wain:'#241a0c'}),
+  /* The forge blackens its own walls, and its plates are bolted to the studs. */
+  armory:inRecipe({wash:'#8d8880',mottle:'44,40,36',seed:9333,soot:2.2,
+    beam:'rgba(58,54,50,.36)',wain:'#1e1b18',bolts:1}),
+  /* Pale, dry, and shelved to the ceiling. */
+  apothecary:inRecipe({wash:'#a4ab97',mottle:'64,76,58',seed:9444,soot:0.7,
+    beam:'rgba(76,92,66,.28)',wain:'#2a3126',shelf:3}),
+  /* Everything for sale, stacked against every wall. */
+  general:inRecipe({wash:'#aba08a',mottle:'80,64,42',seed:9555,soot:1,
+    beam:'rgba(94,74,48,.3)',wain:'#31261a',shelf:3}),
+  /* Whitewash, no hearth to smoke it, and the house-mark painted high and plain. */
+  temple:inRecipe({wash:'#c0bcaa',mottle:'96,92,78',seed:9666,soot:0.35,
+    beam:'rgba(120,116,100,.2)',wain:'#5f5a4c',wainHi:'rgba(214,208,188,.5)',
+    mark:'dawn',markA:0.2}),
+  /* Boards hung as much to keep the draff off the wash as to be seen. */
+  hall:inRecipe({wash:'#9d968a',mottle:'60,56,48',seed:9777,soot:1.25,
+    beam:'rgba(70,58,44,.32)',wain:'#28201a',mark:'shield',markA:0.26}),
+  /* Sun-faded, and scuffed at hip height by a decade of practice footwork. */
+  training:inRecipe({wash:'#b0a488',mottle:'92,76,48',seed:9888,soot:0.5,
+    beam:'rgba(104,84,50,.26)',wain:'#3a2f20',scuff:1})
+};
+function interiorWall(rec){
+  return function(g){
+    grain(g,rec.wash,18,rec.seed);
+    var r=new Rules.RNG(rec.seed),i;
+    for(i=0;i<20;i++){g.fillStyle='rgba('+rec.mottle+','+(0.04+r.chance(.5)?.05:.02)+')';
+      g.beginPath();g.arc(r.int(0,TEX),r.int(0,TEX),r.int(4,11),0,6.29);g.fill();}
+    /* soot creeping down from the joists, and by the trade: a shrine has no hearth
+       to blacken it, a forge has no ceiling that was ever scrubbed */
+    for(var x=0;x<TEX;x+=17){
+      var grd=g.createLinearGradient(0,0,0,TEX*0.55);
+      grd.addColorStop(0,'rgba(36,29,21,'+Math.min(0.8,0.38*rec.soot).toFixed(3)+')');
+      grd.addColorStop(1,'rgba(36,29,21,0)');
+      g.fillStyle=grd;g.fillRect(x,0,6+r.int(0,8),TEX*0.55);
+    }
+    /* paper above the wainscot in the rooms someone keeps for sleeping in */
+    if(rec.paper){
+      g.fillStyle='rgba(214,182,132,'+(0.30*rec.paper).toFixed(3)+')';
+      g.fillRect(0,TEX*0.2,TEX,TEX*0.3);
+      g.fillStyle='rgba(64,46,26,.34)';
+      g.fillRect(0,TEX*0.2,TEX,1.5);g.fillRect(0,TEX*0.5-1.5,TEX,1.5);
+      /* a stripe, because flocked paper was cheap and repeating, and a plain band
+         reads as a repair rather than a decoration */
+      g.fillStyle='rgba(150,110,62,'+(0.16*rec.paper).toFixed(3)+')';
+      for(var pp=6;pp<TEX;pp+=26)g.fillRect(pp,TEX*0.2+2,9,TEX*0.3-4);
+      for(i=0;i<70;i++){g.fillStyle='rgba(120,88,50,.16)';
+        g.fillRect(r.int(0,TEX),TEX*0.22+r.int(0,(TEX*0.26)|0),2,2);}
+    }
+    // the scantling behind the wash, just legible
+    g.strokeStyle=rec.beam;g.lineWidth=1;
+    for(var x2=8;x2<TEX;x2+=34){g.beginPath();g.moveTo(x2,6);g.lineTo(x2,TEX-11);g.stroke();}
+    /* shelved trades: the shadow the shelves throw, so the room reads crowded
+       before a single crate is placed in it */
+    if(rec.shelf){
+      for(i=0;i<rec.shelf;i++){
+        var sy=TEX*(0.3+i*0.17);
+        g.fillStyle='rgba(24,18,12,.3)';g.fillRect(0,sy,TEX,3);
+        g.fillStyle='rgba(160,138,104,.26)';g.fillRect(0,sy-1.5,TEX,1.5);
+        for(var s=0;s<7;s++){var sw=6+r.int(2,8),sx2=r.int(4,TEX-14),sh=8+r.int(0,10);
+          g.fillStyle='rgba(38,28,18,'+(0.16+r.chance(.5)*0.12).toFixed(3)+')';
+          g.fillRect(sx2,sy-sh,sw,sh);}
+      }
+    }
+    /* the house-mark, painted high and left faint: a shrine's disc, a hall's board */
+    if(rec.mark){
+      g.save();g.translate(TEX*0.5,TEX*0.2);g.scale(TEX/64*2.6,TEX/64*2.6);
+      signMotif(g,rec.mark,-7,-5,14,10,'rgba(52,44,34,'+rec.markA+')');
+      g.restore();
+    }
+    /* practice scuffs at hip height, bolt heads where a forge plates its studs */
+    if(rec.scuff){
+      for(i=0;i<9;i++){var kx=r.int(10,TEX-30),ky=TEX*(0.52+r.chance(.6)*0.22);
+        g.strokeStyle='rgba(228,214,186,'+(0.07+r.chance(.5)*0.08).toFixed(3)+')';
+        g.lineWidth=r.int(1,3);g.beginPath();g.moveTo(kx,ky);
+        g.lineTo(kx+r.int(8,26),ky-r.int(2,12));g.stroke();}
+      g.lineWidth=1;
+    }
+    if(rec.bolts){
+      for(var by=26;by<TEX-20;by+=44)for(var bx=8;bx<TEX;bx+=34){
+        g.fillStyle='rgba(18,16,14,.5)';g.beginPath();g.arc(bx,by,2.2,0,6.29);g.fill();
+        g.fillStyle='rgba(150,150,152,.22)';
+        g.beginPath();g.arc(bx-0.6,by-0.6,0.9,0,6.29);g.fill();}
+    }
+    // wainscot and the dark line where wall meets boards
+    g.fillStyle=rec.wain;g.fillRect(0,TEX-8,TEX,8);
+    g.fillStyle=rec.wainHi;g.fillRect(0,TEX-8,TEX,1);
+    g.fillStyle='rgba(16,12,9,.4)';g.fillRect(0,TEX-2,TEX,2);
+  };
+}
 /* What stands on the sill inside the glass. Silhouettes only: the window is 21×18
    design units and anything drawn inside it that tries to be detail reads as dirt. */
 function windowGoods(g,kind,X,Y,W,H,ink){
@@ -896,24 +1017,36 @@ function buildTextures(){
     g.beginPath();g.moveTo(52,62);g.lineTo(64,46);g.lineTo(76,62);g.moveTo(58,56);g.lineTo(70,56);g.stroke();
     g.fillStyle='rgba(20,17,14,.16)';g.fillRect(0,TEX-14,TEX,14);
   });
-  TEXCACHE['i']=tile(function(g){   // the inside of a wall: lime wash over lath, no windows
-    grain(g,'#a2988a',18,29);
-    var r=new Rules.RNG(9091);
-    for(var i=0;i<20;i++){g.fillStyle='rgba(70,62,50,'+(0.04+r.chance(.5)?.05:.02)+')';
-      g.beginPath();g.arc(r.int(0,TEX),r.int(0,TEX),r.int(4,11),0,6.29);g.fill();}
-    // soot creeping down from the joists, darker than any street facade
-    for(var x=0;x<TEX;x+=17){
-      var grd=g.createLinearGradient(0,0,0,TEX*0.55);
-      grd.addColorStop(0,'rgba(36,29,21,.38)');grd.addColorStop(1,'rgba(36,29,21,0)');
-      g.fillStyle=grd;g.fillRect(x,0,6+r.int(0,8),TEX*0.55);
+  /* The untraded room. Each trade's own shell is built on first sighting; INART. */
+  TEXCACHE['i']=tile(interiorWall(INART['']));
+  /* The back of a shop leaf, seen from the room it keeps. Whoever boarded a door
+     against the weather did not leave the inside as plaster, and showing the street
+     front from inside - plaque, awning and all - is how a room stops being a room. */
+  TEXCACHE['di']=tile(function(g){
+    var r=new Rules.RNG(1207),BS=TEX/16;
+    for(var b=0;b<16;b++){
+      g.fillStyle=(b%2)?'#573e26':'#4a3520';
+      g.fillRect(b*BS,0,BS-2,TEX);
+      g.fillStyle='rgba(18,12,7,.55)';g.fillRect(b*BS+BS-2,0,2,TEX);   // the joint's shadow
+      g.fillStyle='rgba(240,214,170,.05)';g.fillRect(b*BS,0,1.5,TEX);  // the lit edge
+      for(var k=0;k<5;k++){var gy=r.int(0,TEX),gh=r.int(8,30);        // grain along the board
+        g.fillStyle='rgba(26,18,10,'+(0.06+r.chance(.5)*0.08).toFixed(3)+')';
+        g.fillRect(b*BS+2+r.int(0,BS-6),gy,1.6,gh);}
     }
-    // the scantling behind the wash, just legible
-    g.strokeStyle='rgba(88,74,54,.26)';g.lineWidth=1;
-    for(var x2=8;x2<TEX;x2+=34){g.beginPath();g.moveTo(x2,6);g.lineTo(x2,TEX-11);g.stroke();}
-    // wainscot and the dark line where wall meets boards
-    g.fillStyle='#2e2317';g.fillRect(0,TEX-8,TEX,8);
-    g.fillStyle='rgba(126,100,64,.5)';g.fillRect(0,TEX-8,TEX,1);
-    g.fillStyle='rgba(16,12,9,.4)';g.fillRect(0,TEX-2,TEX,2);
+    // the two rails that bind the boards, and the brace behind them
+    g.fillStyle='#3a2815';g.fillRect(0,TEX*0.2,TEX,TEX*0.075);g.fillRect(0,TEX*0.68,TEX,TEX*0.075);
+    g.fillStyle='rgba(226,196,150,.10)';g.fillRect(0,TEX*0.2,TEX,1.5);g.fillRect(0,TEX*0.68,TEX,1.5);
+    g.strokeStyle='#3a2815';g.lineWidth=TEX*0.05;g.beginPath();
+    g.moveTo(TEX*0.05,TEX*0.92);g.lineTo(TEX*0.95,TEX*0.1);g.stroke();
+    /* iron: a latch plate and the bar that holds the leaf shut from the inside */
+    g.fillStyle='#211d19';g.fillRect(TEX*0.7,TEX*0.46,TEX*0.14,TEX*0.1);
+    g.fillStyle='#4b443c';g.fillRect(TEX*0.72,TEX*0.48,TEX*0.05,TEX*0.03);
+    g.fillStyle='#2a2521';g.fillRect(TEX*0.08,TEX*0.52,TEX*0.5,TEX*0.035);
+    for(var bv=0;bv<3;bv++){g.fillStyle='#191512';
+      g.beginPath();g.arc(TEX*(0.12+bv*0.2),TEX*0.5375,2.6,0,6.29);g.fill();}
+    // the dark line where the leaf meets its frame, both jambs and the threshold
+    g.fillStyle='rgba(14,10,7,.5)';g.fillRect(0,0,3,TEX);g.fillRect(TEX-3,0,3,TEX);
+    g.fillRect(0,0,TEX,3);g.fillRect(0,TEX-4,TEX,4);
   });
   /* Secret doors are indistinguishable from their wall, which is the entire point.
      Fountains are NOT: the grid has always had a character for the town's public water
@@ -925,15 +1058,20 @@ function buildTextures(){
 function texFor(c){
   var t=buildTextures();
   if(t[c])return t[c];
-  /* A trade's front is painted the first time that trade is actually seen, and kept
-     from then on. Painting all eight whenever anyone rendered a cellar would tax the
-     first frame of every delve for shops that are forty miles away. */
-  if(c.length>2&&c.charAt(0)==='*'&&c.charAt(1)===':'){
-    var recipe=SVCART[c.slice(2)];
-    if(recipe){
-      var made=texTile(shopfront(recipe));
-      if(made){t[c]=made;return made;}
-    }
+  /* A trade's front and its own room shell are painted the first time that trade is
+     actually seen, and kept from then on. Painting all eight whenever anyone rendered
+     a cellar would tax the first frame of every delve for shops forty miles away.
+     A service the art has no recipe for - a horse fair, a shrine with no trade -
+     still gets its trade's SHAPE of wall, not the generic one: it falls back to the
+     untraded storefront, never to the rough stone below. */
+  if(c.length>2&&c.charAt(1)===':'){
+    var svc=c.slice(2),base=c.charAt(0)==='i';
+    var art=base?INART:SVCART;
+    var made=texTile(base
+      ?interiorWall(art.hasOwnProperty(svc)?art[svc]:art[''])
+      :shopfront(art.hasOwnProperty(svc)?art[svc]:art['']));
+    if(made){t[c]=made;return made;}
+    return base?t['i']:t['*'];
   }
   return t['#'];
 }
@@ -2075,11 +2213,18 @@ function render(prep,cam,scale,opts){
        no contrast at all - the question becomes "where is the front of the inn?".
        A dark opening cut into a bright wall answers it without a sign. */
     var roomFace=0;
-    if(outdoor&&!doorFace){
+    if(outdoor){
       var nbX=mapX,nbY=mapY;                  // the tile the face looks out on
       if(side===0)nbX+=(stepX>0?-1:1);else nbY+=(stepY>0?-1:1);
       roomFace=(nbX>=0&&nbY>=0&&nbX<prep.w&&nbY<prep.h)?prep.roof[nbY*prep.w+nbX]:0;
-      if(roomFace&&mat.interior)tex=texFor(mat.interior);
+      if(roomFace&&doorFace){
+        /* The painted front belongs to the lane, not to the room. Seen from inside,
+           a shop door is the back of a boarded leaf. */
+        tex=texFor('di');
+      }else if(roomFace&&mat.interior){
+        var rsvc=(prep.svcAll&&prep.svcAll[nbY*prep.w+nbX])||'';
+        tex=texFor(rsvc?mat.interior+':'+rsvc:mat.interior);
+      }
     }
     /* Same block, different weathering, and sometimes the other hand. A wall face
        is identified by its tile and its orientation, so the choice is stable while
@@ -2580,7 +2725,10 @@ return{init:init,resize:resize,prepare:prepare,render:render,minimap:minimap,
   texFails:function(){return TEXFAIL.slice();},
   texSwatch:function(k){
     buildTextures();
-    var t=/^\*:/.test(k)?texFor(k):TEXCACHE[k];   // a trade's front is built on demand
+    /* Anything with a trade suffix is built on demand. Asking for a key that does not
+       exist returns a message instead of mounting the previous swatch again - which is
+       how nine different rooms once measured as nine identical walls. */
+    var t=(k.indexOf(':')>0)?texFor(k):TEXCACHE[k];
     if(!t||!t.base)return 'no texture for '+k;
     var c=document.createElement('canvas');
     c.width=256;c.height=256;
