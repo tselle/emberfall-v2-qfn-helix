@@ -44,6 +44,7 @@ function start(spec){
   pcs.forEach(function(p){while(occupiedBy(pcs,p.x,p.y,p))p.y++;});
   CB={spec:spec,mons:mons,pcs:pcs,obstacles:obstacles,round:0,phase:'idle',
     order:[],turn:null,tool:null,moveSet:{},log:[],xp:0,kills:0,escaped:0,
+    thrown:{},
     surprise:spec.partySurprise||spec.monsterSurprise||0,done:false,token:0};
   cv.classList.remove('hidden');
   FX.length=0;ensureAnim();
@@ -131,6 +132,19 @@ function resolve(result){
       if(L.gold){var g=typeof L.gold==='string'?Rules.dice(L.gold):L.gold;if(g){G.gold+=g;r.spoilsGold=g;logEvent('Spoils: '+g+' gp.');}}
       (L.items||[]).forEach(function(id){var cb2=Game.giveToCarrier(id);var nm=itemName(id);
         r.spoilsItems.push(nm);r.spoilsCarriers[nm]=cb2?cb2.name:'';logEvent('Recovered: '+nm);});
+    }
+    /* Thrown steel is not spent until it is lost: half of what left the hand,
+       rounded up, is wiped on the grass and goes back in the pack. */
+    if(result==='win'&&CB.thrown){
+      Object.keys(CB.thrown).forEach(function(id){
+        var back=Math.ceil(CB.thrown[id]/2);if(back<=0)return;
+        var carriers={};
+        for(var k=0;k<back;k++){var who=Game.giveToCarrier(id);if(who)carriers[who.name]=1;}
+        var nm2=itemName(id)+(back>1?' \u00d7'+back:'');
+        r.spoilsItems.push(nm2);r.spoilsCarriers[nm2]=Object.keys(carriers).join(', ');
+        logEvent('Gathered from the field: '+back+' of '+CB.thrown[id]+' thrown '+
+          itemName(id).toLowerCase()+'.');
+      });
     }
     if(result==='win'&&CB.spec.onWin)CB.spec.onWin(r);
   }
@@ -342,6 +356,8 @@ function ammoLeft(c,it){
   });
   return n;
 }
+/* What left the hand this battle, so that half of it can come back again. */
+function threw(id){if(CB){CB.thrown=CB.thrown||{};CB.thrown[id]=(CB.thrown[id]||0)+1;}return true;}
 /* Spend one round. A counted quiver re-stores itself as 'arrow#7'; a thrown
    weapon loses one item, and the last of them may come off the shoulder. */
 function spendAmmo(c,it){
@@ -349,7 +365,7 @@ function spendAmmo(c,it){
   var pool=c.inv||[],i;
   for(i=0;i<pool.length;i++){
     if(ammoBase(pool[i])!==base)continue;
-    if(base===it.id){pool.splice(i,1);return true;}
+    if(base===it.id){pool.splice(i,1);return threw(base);}
     var parts=String(pool[i]).split('#');
     var left=parts.length>1?+parts[1]:((item(base)||{}).pieces||1);
     if(left-1<=0)pool.splice(i,1);else pool[i]=base+'#'+(left-1);
@@ -358,7 +374,7 @@ function spendAmmo(c,it){
   if(base===it.id&&c.eq&&c.eq.missile&&ammoBase(c.eq.missile)===base){
     c.eq.missile=null;
     logEvent('The last '+(it.n||'').toLowerCase()+' leaves your hand.');
-    return true;
+    return threw(base);
   }
   return false;
 }
@@ -393,8 +409,8 @@ function buildCommands(u){
   }
   var c=u.c;
   cmd('⚔ Attack',function(){arm({kind:'attack'});hint.textContent='Click a foe to fall on it — distance will be crossed if your feet can manage it.';});
-  var mw=missileWeapon(c);
-  cmd('➹ Shoot',function(){arm({kind:'shoot'});
+  var mw=missileWeapon(c),shots=(mw&&ammoFor(mw))?ammoLeft(c,mw):-1;
+  cmd('➹ Shoot'+(shots>=0?' \u00b7 '+shots:''),function(){arm({kind:'shoot'});
     var rf=Rules.missileROF(c,mw),rr=Rules.missileRange(mw);
     hint.textContent=mw.n+' \u2014 '+rf+' shot'+(rf>1?'s':'')+' to '+rr+' paces: clean to '
       +Math.round(rr/3)+', \u22122 to '+Math.round(rr*2/3)+', \u22125 beyond.';

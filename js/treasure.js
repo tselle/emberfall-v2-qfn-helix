@@ -28,10 +28,22 @@ function pool(cat,tier){
       (cat==='misc'&&(it.t==='g'||it.valuable))||
       (cat==='armor'&&(it.t==='a'||it.t==='s'))||
       (cat==='sword'&&it.t==='w'&&/sword|blade|dagger/.test(it.fam||id))||
-      (cat==='weapon'&&it.t==='w'&&!/sword|blade|dagger/.test(it.fam||id));
+      /* The spec fixes the category weights, so bows join 'other weapons'
+         rather than getting a category of their own. */
+      (cat==='weapon'&&((it.t==='w'&&!/sword|blade|dagger/.test(it.fam||id))||
+                        (it.t==='r'&&!it.ammo)));
     if(ok&&itemTier(it)<=tier)out.push(id);
   });
   return out;
+}
+/* A bow kept in a barrow comes with a quiver; a sling with a pouch. Ammunition
+   is not a treasure roll of its own - it is what the weapon was stored with. */
+function ammoMate(id){
+  var it=ITEMS[id];
+  if(!it||it.t!=='r'||it.ammo)return null;
+  if(id.indexOf('bow')>=0)return 'arrow';
+  if(id==='sling')return 'bullet';
+  return null;                       // a thrown weapon is its own ammunition
 }
 function pickCat(rng){
   var r=rng.next()*totalW(),acc=0;
@@ -55,7 +67,10 @@ function roll(rng,level,kind){
   var cap=tierFor(level)+(kind==='hoard'?1:0);
   for(var i=0;i<n;i++){
     var it=rollOne(rng,level,cap);
-    if(it)items.push(it);
+    if(!it)continue;
+    items.push(it);
+    var mate=ammoMate(it);
+    if(mate&&ITEMS[mate])items.push(mate);
   }
   if(kind==='cache'&&!items.length){var p=pool('potion',cap);if(p.length)items.push(rng.pick(p));}
   if(kind==='hoard'){
@@ -65,5 +80,5 @@ function roll(rng,level,kind){
   }
   return {gold:gold,items:items};
 }
-return{tierFor:tierFor,roll:roll,itemTier:itemTier};
+return{tierFor:tierFor,roll:roll,itemTier:itemTier,ammoMate:ammoMate};
 })();
